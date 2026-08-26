@@ -32,6 +32,18 @@ server.app.log.info(
     mcp: server.config.enableMcp,
     workspace: server.config.defaultWorkspace,
     agents: server.agents.map((agent) => agent.id),
+    // Which meeting providers are actually available, so that is knowable at
+    // startup rather than at the moment a real meeting is waiting on a bot.
+    // Recall needs all of key, webhook base URL and secret; speech needs the
+    // speaker page on top of that, and its absence is the difference between
+    // an agent that talks and one that only types.
+    providers: server.recall === undefined ? ["mock"] : ["mock", "recall"],
+    recallSpeech:
+      server.recall === undefined
+        ? "n/a"
+        : server.config.recall.speakerUrl === undefined
+          ? "text only (no speaker page configured)"
+          : "voice",
   },
   "amp ready (local v0 developer prototype)",
 );

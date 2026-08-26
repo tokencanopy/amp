@@ -6,6 +6,23 @@
 import { resolve } from "node:path";
 import { z } from "zod";
 
+/**
+ * An optional setting where BLANK MEANS UNSET.
+ *
+ * `AMP_RECALL_WEBHOOK_BASE_URL=` in a .env parses as "" and is not
+ * `undefined`, so the readiness check that gates the Recall provider used to
+ * pass on a blank line — and a half-configured bot was then offered, accepted
+ * a real meeting URL, and threw `Invalid URL` at the moment it tried to
+ * dispatch into someone's call. Scaffolding a .env with blank placeholders is
+ * the normal way this gets set up, so blank has to mean absent.
+ */
+const blankIsUnset = z
+  .string()
+  .optional()
+  .transform((value) =>
+    value === undefined || value.trim() === "" ? undefined : value.trim(),
+  );
+
 const schema = z.object({
   AMP_HOST: z.string().default("127.0.0.1"),
   AMP_PORT: z.coerce.number().int().min(1).max(65_535).default(4321),
@@ -37,21 +54,21 @@ const schema = z.object({
     .default("false")
     .transform((value) => value === "true"),
   // --- Recall.ai meeting provider (optional; the mock simulator is default) ---
-  AMP_RECALL_API_KEY: z.string().optional(),
+  AMP_RECALL_API_KEY: blankIsUnset,
   AMP_RECALL_REGION: z.string().default("us-west-2"),
   /** Public base URL Recall can reach — a tunnel in development. */
-  AMP_RECALL_WEBHOOK_BASE_URL: z.string().optional(),
+  AMP_RECALL_WEBHOOK_BASE_URL: blankIsUnset,
   /**
    * Shared secret required on every inbound webhook. Recall's real-time
    * webhooks are unauthenticated HTTP to a public URL, so the secret in the
    * path is what stops anyone who finds it from writing a meeting's
    * transcript.
    */
-  AMP_RECALL_WEBHOOK_SECRET: z.string().optional(),
+  AMP_RECALL_WEBHOOK_SECRET: blankIsUnset,
   /** Page whose audio Recall streams into the call, for agent speech. */
-  AMP_RECALL_SPEAKER_URL: z.string().optional(),
+  AMP_RECALL_SPEAKER_URL: blankIsUnset,
   /** A macOS `say` voice for the speaker page. Unknown names fall back. */
-  AMP_RECALL_SPEAKER_VOICE: z.string().optional(),
+  AMP_RECALL_SPEAKER_VOICE: blankIsUnset,
   AMP_RECALL_BOT_NAME: z.string().default("AMP cofounder"),
   AMP_LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
