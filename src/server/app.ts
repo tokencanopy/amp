@@ -36,6 +36,7 @@ import { MeetingGateway } from "../gateway/gateway.js";
 import type { MockMeetingProvider } from "../providers/mock.js";
 import type { RecallMeetingProvider } from "../providers/recall/provider.js";
 import type { RecallWebhookEnvelope } from "../providers/recall/wire.js";
+import { MAX_TTS_CHARS, synthesizeWav } from "../speech/tts.js";
 import { RealtimeHub } from "./hub.js";
 
 export class ApiError extends Error {
@@ -772,6 +773,64 @@ export function buildApp(deps: BuildAppDependencies): FastifyInstance {
       },
     );
   }
+
+  // ---- speech synthesis for the speaker page ----------------------------
+  //
+  // The speaker page runs in Recall's browser, not the operator's, and that
+  // browser has no `speechSynthesis` voices — so the audio has to be made
+  // here and fetched. See src/speech/tts.ts for why it is local synthesis.
+  //
+  // This route is reachable through the same public tunnel as the webhook, so
+  // it carries the same shared secret and is refused identically without it.
+  // Unauthenticated, it would be an open text-to-audio endpoint on a stranger's
+  // machine, and a way to make this host run `say` on demand.
+  routes.post(
+    "/api/meetings/:meetingId/tts",
+    {
+      schema: {
+        params: meetingParams,
+        querystring: z.object({ secret: z.string().max(256).optional() }),
+        body: z.object({
+          text: z.string().min(1).max(MAX_TTS_CHARS),
+          voice: z.string().max(64).optional(),
+          rate: z.number().int().min(80).max(400).optional(),
+        }),
+      },
+    },
+    async (request, reply) => {
+      const expected = config.recall.webhookSecret;
+      if (expected !== undefined) {
+        const offered = request.query.secret ?? "";
+        if (!timingSafeEqualString(expected, offered)) {
+          return reply
+            .status(404)
+            .send({ error: { code: "not_found", message: "Not found." } });
+        }
+      }
+      if (store.getMeeting(request.params.meetingId) === null) {
+        throw new ApiError(404, "unknown_meeting", "Meeting not found.");
+      }
+      try {
+        const wav = await synthesizeWav(request.body.text, {
+          voice: request.body.voice,
+          rate: request.body.rate,
+        });
+        return reply
+          .header("content-type", "audio/wav")
+          .header("cache-control", "no-store")
+          .send(wav);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "speech synthesis failed";
+        // 503 rather than 500: the speaker page treats this as "fall back to
+        // whatever voice you have", which is a different thing from a bug.
+        request.log.warn({ err: message }, "tts unavailable");
+        return reply
+          .status(503)
+          .send({ error: { code: "tts_unavailable", message } });
+      }
+    },
+  );
 
   // ---- realtime ---------------------------------------------------------
 

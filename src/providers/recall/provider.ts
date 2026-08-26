@@ -56,6 +56,8 @@ export interface RecallConfig {
   webhookSecret?: string;
   /** Page whose audio Recall streams into the call, if speech is wanted. */
   speakerUrl?: string;
+  /** A `say` voice for that page to request. Unknown names fall back. */
+  speakerVoice?: string;
   botName?: string;
 }
 
@@ -139,6 +141,30 @@ export class RecallMeetingProvider implements MeetingProvider {
    * silently produces a URL that looks right in a substring check and 404s in
    * production.
    */
+  /**
+   * The page Recall streams into the call as the bot's camera and audio.
+   *
+   * Built through `URL` rather than concatenated, for the same reason the
+   * webhook URL is: a configured speaker URL that already carries a query
+   * string — a CDN token, a cache buster — would otherwise get a second `?`
+   * and become a URL that resolves to nothing, and the failure would show up
+   * as a silent bot in a live meeting rather than as an error here.
+   *
+   * It carries the shared secret because the page fetches synthesized audio
+   * back from this host, and that route is refused without it.
+   */
+  #speakerPageUrl(meetingId: string, speakerUrl: string): string {
+    const url = new URL(speakerUrl);
+    url.searchParams.set("meetingId", meetingId);
+    if (this.#config.webhookSecret !== undefined) {
+      url.searchParams.set("secret", this.#config.webhookSecret);
+    }
+    if (this.#config.speakerVoice !== undefined) {
+      url.searchParams.set("voice", this.#config.speakerVoice);
+    }
+    return url.toString();
+  }
+
   #webhookUrl(meetingId: string): string {
     const url = new URL(
       `/api/providers/recall/${encodeURIComponent(meetingId)}`,
@@ -231,7 +257,7 @@ export class RecallMeetingProvider implements MeetingProvider {
               camera: {
                 kind: "webpage",
                 config: {
-                  url: `${this.#config.speakerUrl}?meetingId=${encodeURIComponent(meetingId)}`,
+                  url: this.#speakerPageUrl(meetingId, this.#config.speakerUrl),
                 },
               },
             },

@@ -67,7 +67,7 @@ Run from `apps/amp/`:
 | `npm run dev`       | start with reload on `127.0.0.1:4321`                            |
 | `npm run build`     | compile TypeScript to `dist/`                                    |
 | `npm start`         | run the compiled build                                           |
-| `npm test`          | the full suite (211 tests, spawns real child processes)          |
+| `npm test`          | the full suite (223 tests, spawns real child processes)          |
 | `npm run lint`      | eslint                                                           |
 | `npm run typecheck` | `tsc --noEmit` over src, tests and scripts                       |
 | `npm run format`    | prettier                                                         |
@@ -341,13 +341,47 @@ our purposes — good for testing the transcript path, not for a participant.
 1. **Output Media always carries video.** There is no audio-only mode and the
    camera cannot be off, so the agent is a visible tile in the call.
 2. **The speaker page is the speech engine.** Recall streams a webpage's audio
-   into the call; that page must make the sound itself. Browser
-   `speechSynthesis` may have no voices in a server-side browser, so plan for
-   a real TTS there. Without a page configured, the agent posts to chat
-   instead of talking — mute, but never silently so.
+   into the call; that page must make the sound itself. `public/speaker.html`
+   is that page. Without it configured, the agent posts to chat instead of
+   talking — mute, but never silently so.
 3. **The webhook is public and unauthenticated by the vendor.** Its URL
    carries a shared secret (`AMP_RECALL_WEBHOOK_SECRET`) compared in constant
    time, because that transcript is the one input the agent is told to trust.
+
+### How the agent gets a voice
+
+`public/speaker.html` is the page Recall streams into the call. It subscribes
+to the meeting's realtime feed, and when the gateway decides something should
+be said aloud it plays that text — one utterance at a time, in order, because
+a meeting can wait for a late answer but cannot un-hear two voices at once.
+
+**The audio is synthesized on the machine running AMP, not in the browser.**
+That is not a preference; it is forced. The browser that loads this page is
+headless Chrome inside Recall's infrastructure, where `speechSynthesis` reports
+zero voices and speaks silence. So the page fetches WAV bytes from
+`POST /api/meetings/:id/tts`, which shells out to macOS `say` and `afconvert`
+(see `src/speech/tts.ts`). Both ship with the OS, so speech adds no dependency,
+no credential, no cost and no third party — the same trade `node:sqlite` makes,
+for the same reason: this has to run from a clone.
+
+The cost is that **speech is macOS-only**. Elsewhere the route answers 503
+`tts_unavailable` and the page falls back to `speechSynthesis`, which on a
+developer's own machine has voices and works.
+
+That TTS route is reachable through the same public tunnel as the webhook, so
+it carries the same shared secret and 404s without it. Unauthenticated it would
+be an open text-to-audio endpoint on your laptop, and a way to make your machine
+run `say` on demand.
+
+**The one thing this cannot verify from here is autoplay.** A browser may refuse
+to start audio without a user gesture, and Recall's is configured not to —
+streaming page audio is the entire product — but if that is ever wrong the agent
+is mute in a live call. So the page says so in the tile itself, in red, where a
+participant can see it, rather than only in a console nobody is reading. A
+blocked spoken answer is **not** re-routed to chat: `planSpeech` split the
+answer before it reached the page, so the spoken half is lost to the call and
+survives only in the transcript. That is the first thing to check on a real
+call, and `docs/TODO.md` item 71 is where it is tracked until it has been.
 
 ### The wire format, reconciled
 

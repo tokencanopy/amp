@@ -50,6 +50,8 @@ const schema = z.object({
   AMP_RECALL_WEBHOOK_SECRET: z.string().optional(),
   /** Page whose audio Recall streams into the call, for agent speech. */
   AMP_RECALL_SPEAKER_URL: z.string().optional(),
+  /** A macOS `say` voice for the speaker page. Unknown names fall back. */
+  AMP_RECALL_SPEAKER_VOICE: z.string().optional(),
   AMP_RECALL_BOT_NAME: z.string().default("AMP cofounder"),
   AMP_LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
@@ -73,6 +75,7 @@ export interface AppConfig {
     webhookBaseUrl: string | undefined;
     webhookSecret: string | undefined;
     speakerUrl: string | undefined;
+    speakerVoice: string | undefined;
     botName: string;
   };
   logLevel: string;
@@ -103,6 +106,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       webhookBaseUrl: parsed.AMP_RECALL_WEBHOOK_BASE_URL,
       webhookSecret: parsed.AMP_RECALL_WEBHOOK_SECRET,
       speakerUrl: parsed.AMP_RECALL_SPEAKER_URL,
+      speakerVoice: parsed.AMP_RECALL_SPEAKER_VOICE,
       botName: parsed.AMP_RECALL_BOT_NAME,
     },
     logLevel: parsed.AMP_LOG_LEVEL,

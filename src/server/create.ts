@@ -61,6 +61,9 @@ export function createServer(
           ...(config.recall.speakerUrl === undefined
             ? {}
             : { speakerUrl: config.recall.speakerUrl }),
+          ...(config.recall.speakerVoice === undefined
+            ? {}
+            : { speakerVoice: config.recall.speakerVoice }),
           botName: config.recall.botName,
         },
       })

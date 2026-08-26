@@ -161,6 +161,17 @@ function makeProvider(
   return { provider, calls: recorded.calls };
 }
 
+/** The speaker-page URL out of the Create Bot call the provider made. */
+function speakerUrlFrom(calls: Call[]): string {
+  const body = calls[0]!.body as {
+    output_media?: { camera?: { config?: { url?: string } } };
+  };
+  const url = body.output_media?.camera?.config?.url;
+  if (url === undefined)
+    throw new Error("no speaker URL in the create-bot call");
+  return url;
+}
+
 async function liveMeeting(provider: RecallMeetingProvider) {
   const meeting = await provider.createMeeting({
     title: "Retry policy sync",
@@ -278,6 +289,34 @@ describe("bot lifecycle", () => {
     ).output_media;
     expect(media.camera.config.url).toContain("https://tunnel.test/speak");
     expect(media.camera.config.url).toContain(meeting.id);
+  });
+
+  it("hands the speaker page the secret it needs to fetch audio back", async () => {
+    // The page synthesizes nothing itself — Recall's browser has no voices —
+    // so it fetches WAV bytes from this host, and that route refuses it
+    // without the shared secret.
+    const { provider, calls } = makeProvider({
+      speakerUrl: "https://tunnel.test/speaker.html",
+    });
+    const meeting = await liveMeeting(provider);
+    const url = new URL(speakerUrlFrom(calls));
+    expect(url.searchParams.get("meetingId")).toBe(meeting.id);
+    expect(url.searchParams.get("secret")).toBe("s3cret");
+  });
+
+  it("does not corrupt a speaker URL that already has a query string", async () => {
+    // Concatenating "?meetingId=" onto a URL with an existing query produces
+    // a second "?" and a page that resolves to nothing — which would surface
+    // as a silently mute bot in a live call, not as an error here.
+    const { provider, calls } = makeProvider({
+      speakerUrl: "https://tunnel.test/speaker.html?theme=dark",
+    });
+    const meeting = await liveMeeting(provider);
+    const raw = speakerUrlFrom(calls);
+    expect(raw.split("?")).toHaveLength(2);
+    const url = new URL(raw);
+    expect(url.searchParams.get("theme")).toBe("dark");
+    expect(url.searchParams.get("meetingId")).toBe(meeting.id);
   });
 
   it("removes the bot when the meeting ends", async () => {

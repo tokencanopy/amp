@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AMP speaker</title>
+    <!--
+      The agent's face and voice inside a real call.
+
+      Recall streams THIS PAGE into the meeting as the bot's camera and audio.
+      That has two consequences that shape everything below:
+
+        1. Output Media always carries video. There is no audio-only mode and
+           the camera cannot be off, so this page is a visible tile whether or
+           not it is speaking. It is therefore designed to be *looked at* — it
+           says who the agent is and what it is saying, so a participant
+           glancing at the tile understands why a voice just spoke.
+
+        2. This browser is not the operator's. It is headless Chrome in
+           Recall's infrastructure, where `speechSynthesis` reports no voices
+           and speaks silence. So the audio is synthesized on the AMP host and
+           fetched (see src/speech/tts.ts). `speechSynthesis` remains only as
+           a fallback for a browser that does have voices — a human opening
+           this page locally to see what the bot sees.
+
+      The page holds no credential of its own: the meeting id and the shared
+      secret arrive in its query string, put there by the provider when it
+      dispatched the bot.
+    -->
+    <style>
+      :root {
+        --bg: #14181a;
+        --ink: #f4f1ea;
+        --muted: #97a0a3;
+        --canopy: #2b4033;
+        --accent: #c17d2b;
+        --live: #4ade80;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--ink);
+        font-family:
+          Inter,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4vmin;
+        overflow: hidden;
+      }
+      .tile {
+        width: 100%;
+        max-width: 1100px;
+        display: flex;
+        flex-direction: column;
+        gap: 3vmin;
+      }
+      .who {
+        display: flex;
+        align-items: center;
+        gap: 2vmin;
+      }
+      .dot {
+        width: 1.6vmin;
+        height: 1.6vmin;
+        min-width: 10px;
+        min-height: 10px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex: none;
+      }
+      .dot[data-state="speaking"] {
+        background: var(--live);
+        animation: pulse 1.1s ease-in-out infinite;
+      }
+      .dot[data-state="error"] {
+        background: #e5534b;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.45;
+          transform: scale(0.82);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .dot[data-state="speaking"] {
+          animation: none;
+        }
+      }
+      .name {
+        font-size: clamp(20px, 3.6vmin, 44px);
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .role {
+        font-size: clamp(12px, 1.9vmin, 20px);
+        color: var(--muted);
+      }
+      .said {
+        font-size: clamp(18px, 3.4vmin, 42px);
+        line-height: 1.35;
+        min-height: 3.6em;
+        color: var(--ink);
+      }
+      .said:empty::before {
+        content: "Listening.";
+        color: var(--muted);
+      }
+      .status {
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+        font-size: clamp(10px, 1.5vmin, 15px);
+        color: var(--muted);
+      }
+      .bar {
+        height: 3px;
+        background: #232a2c;
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .bar > i {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: var(--accent);
+        transition: width 0.2s linear;
+      }
+      .blocked {
+        background: #e5534b;
+        color: #fff;
+        padding: 1.6vmin 2vmin;
+        border-radius: 8px;
+        font-size: clamp(13px, 2.2vmin, 24px);
+        font-weight: 600;
+      }
+      .blocked[hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="tile">
+      <div class="who">
+        <span class="dot" id="dot" data-state="idle"></span>
+        <div>
+          <div class="name" id="agent-name">Agent</div>
+          <div class="role" id="meeting-title">connecting…</div>
+        </div>
+      </div>
+      <div class="said" id="said" aria-live="polite"></div>
+      <div class="bar"><i id="bar"></i></div>
+      <!--
+        Deliberately loud, and deliberately inside the tile rather than in the
+        console: if the browser refuses to play audio, this page is a bot
+        sitting silently in someone's meeting, and the only person who can see
+        that is a participant looking at the tile.
+      -->
+      <!--
+        Says only what is true. `planSpeech` splits the answer into a spoken
+        part and a chat part BEFORE it reaches this page, so a blocked spoken
+        part is not re-routed anywhere — it is lost to the call, and the text
+        above is the only place it appears. Telling a room "it went to chat"
+        when it did not would be worse than saying nothing.
+      -->
+      <div class="blocked" id="blocked" hidden>
+        Audio is blocked in this browser — the agent's spoken answer is not
+        reaching the call. It is shown above, and in the meeting transcript.
+      </div>
+      <div class="status" id="status">starting</div>
+    </div>
+
+    <script type="module">
+      const params = new URLSearchParams(location.search);
+      const meetingId = params.get("meetingId") ?? "";
+      const secret = params.get("secret") ?? "";
+      const voice = params.get("voice") ?? "";
+
+      const el = (id) => document.getElementById(id);
+      const setStatus = (text) => {
+        el("status").textContent = text;
+        console.log("[speaker]", text);
+      };
+      const setState = (state) => el("dot").setAttribute("data-state", state);
+
+      if (meetingId === "") {
+        setStatus("no meetingId in the URL; nothing to join");
+        setState("error");
+        throw new Error("missing meetingId");
+      }
+
+      // ---- audio ---------------------------------------------------------
+      //
+      // One utterance at a time, in arrival order. Two answers overlapping is
+      // worse than one arriving late: a meeting can wait, but it cannot
+      // un-hear two voices at once.
+      const queue = [];
+      let draining = false;
+      let serverTtsWorks = true;
+      let audioBlocked = false;
+
+      // A human who opens this page to see what the bot sees will hit the
+      // autoplay policy that Recall's browser does not have. One gesture
+      // clears it for the rest of the session, so any interaction counts.
+      for (const type of ["pointerdown", "keydown", "touchstart"]) {
+        window.addEventListener(
+          type,
+          () => {
+            if (!audioBlocked) return;
+            audioBlocked = false;
+            el("blocked").hidden = true;
+            setStatus("audio unblocked by interaction");
+            void drain();
+          },
+          { passive: true },
+        );
+      }
+
+      async function fetchSpeech(text) {
+        const url = `/api/meetings/${encodeURIComponent(meetingId)}/tts${
+          secret === "" ? "" : `?secret=${encodeURIComponent(secret)}`
+        }`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(voice === "" ? { text } : { text, voice }),
+        });
+        if (!response.ok) {
+          const detail = await response.text().catch(() => "");
+          throw new Error(`tts ${response.status}: ${detail.slice(0, 200)}`);
+        }
+        return await response.blob();
+      }
+
+      function playBlob(blob) {
+        return new Promise((resolve) => {
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.autoplay = true;
+          const done = () => {
+            URL.revokeObjectURL(url);
+            resolve();
+          };
+          audio.addEventListener("ended", done, { once: true });
+          audio.addEventListener("error", () => {
+            setStatus("audio element failed to play the synthesized clip");
+            done();
+          });
+          audio.ontimeupdate = () => {
+            if (audio.duration > 0) {
+              el("bar").style.width =
+                `${(audio.currentTime / audio.duration) * 100}%`;
+            }
+          };
+          audio.play().catch((error) => {
+            // Autoplay refused. Recall launches its output-media browser to
+            // stream page audio, so it permits this — but that is the one link
+            // in the chain this app cannot verify from here, and if it is ever
+            // wrong the agent is mute in a live call. So it is announced in
+            // the tile itself, where a participant can see it, rather than
+            // only in a console nobody is reading.
+            audioBlocked = true;
+            el("blocked").hidden = false;
+            setState("error");
+            setStatus(`autoplay refused: ${error.message}`);
+            done();
+          });
+        });
+      }
+
+      function speakLocally(text) {
+        return new Promise((resolve) => {
+          const synth = window.speechSynthesis;
+          if (synth === undefined || synth.getVoices().length === 0) {
+            setStatus(
+              "no server audio and no local voices — this turn is mute",
+            );
+            resolve();
+            return;
+          }
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.onend = () => resolve();
+          utterance.onerror = () => resolve();
+          synth.speak(utterance);
+        });
+      }
+
+      async function drain() {
+        if (draining) return;
+        draining = true;
+        while (queue.length > 0) {
+          const text = queue.shift();
+          el("said").textContent = text;
+          setState("speaking");
+          el("bar").style.width = "0%";
+          try {
+            if (serverTtsWorks) {
+              const blob = await fetchSpeech(text);
+              setStatus(`speaking ${blob.size} bytes of synthesized audio`);
+              await playBlob(blob);
+            } else {
+              await speakLocally(text);
+            }
+          } catch (error) {
+            // First failure demotes to the local voice for the rest of the
+            // session rather than retrying the same broken path every turn.
+            serverTtsWorks = false;
+            setStatus(`server tts failed (${error.message}); falling back`);
+            setState("error");
+            await speakLocally(text);
+          }
+          el("bar").style.width = "0%";
+          setState("idle");
+        }
+        draining = false;
+      }
+
+      // ---- the meeting feed ----------------------------------------------
+      //
+      // The same socket the operator's meeting room uses. The gateway
+      // publishes `{type:"speak", text}` when it has decided something should
+      // be said aloud, so this page needs no notion of attention, prompting
+      // or agents — only of speaking.
+      let socket;
+      let backoffMs = 500;
+
+      function connect() {
+        const scheme = location.protocol === "https:" ? "wss" : "ws";
+        socket = new WebSocket(
+          `${scheme}://${location.host}/ws?meetingId=${encodeURIComponent(meetingId)}`,
+        );
+
+        socket.addEventListener("open", () => {
+          backoffMs = 500;
+          setStatus("connected to the meeting feed");
+          setState("idle");
+        });
+
+        socket.addEventListener("message", (event) => {
+          let payload;
+          try {
+            payload = JSON.parse(event.data);
+          } catch {
+            return;
+          }
+          if (payload.type === "speak" && typeof payload.text === "string") {
+            queue.push(payload.text);
+            void drain();
+            return;
+          }
+          if (payload.type === "snapshot" || payload.type === "meeting") {
+            const meeting = payload.meeting ?? payload;
+            if (typeof meeting.title === "string") {
+              el("meeting-title").textContent = meeting.title;
+            }
+            if (typeof meeting.agentDisplayName === "string") {
+              el("agent-name").textContent = meeting.agentDisplayName;
+            }
+            return;
+          }
+          if (payload.type === "error") {
+            setStatus(`feed error: ${String(payload.message)}`);
+            setState("error");
+          }
+        });
+
+        socket.addEventListener("close", () => {
+          // A dropped socket must not leave the bot deaf for the rest of the
+          // call, so it reconnects with a bounded backoff.
+          setStatus(`feed closed; reconnecting in ${backoffMs}ms`);
+          setTimeout(connect, backoffMs);
+          backoffMs = Math.min(backoffMs * 2, 10_000);
+        });
+
+        socket.addEventListener("error", () => {
+          setStatus("feed socket error");
+        });
+      }
+
+      // Name the meeting even before the first socket frame, so the tile is
+      // never an anonymous rectangle sitting in someone's call.
+      fetch(`/api/meetings/${encodeURIComponent(meetingId)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((payload) => {
+          if (payload?.meeting?.title) {
+            el("meeting-title").textContent = payload.meeting.title;
+          }
+          if (payload?.meeting?.agentDisplayName) {
+            el("agent-name").textContent = payload.meeting.agentDisplayName;
+          }
+        })
+        .catch(() => {
+          /* the socket will fill these in */
+        });
+
+      connect();
+    </script>
+  </body>
+</html>
