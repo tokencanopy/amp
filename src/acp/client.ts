@@ -8,7 +8,7 @@
  * OpenClaw) behave like a meeting participant without changing anything about
  * its model, workspace, instructions, skills, tools, session, or memory.
  *
- * Differences from `packages/tc-acp`'s client, which this is modelled on and
+ * Differences from a one-shot ACP client, which this is modelled on and
  * which solves a narrower problem:
  *
  *   - updates are STREAMED to a listener as they arrive, because a meeting

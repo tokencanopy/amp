@@ -17,7 +17,7 @@
  *
  * What differs is only how the events arrive — a webhook, a websocket, a
  * polling API — and every one of those normalizes into `MeetingEvent`. That
- * is the entire point of the abstraction: `apps/amp` has no other
+ * is the entire point of the abstraction: AMP has no other
  * knowledge of meeting platforms anywhere in its code.
  *
  * Concretely, to implement this against a bot vendor:

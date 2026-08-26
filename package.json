@@ -1,8 +1,7 @@
 {
   "name": "@tokencanopy/amp",
   "version": "0.0.1",
-  "private": true,
-  "description": "AMP (Agent Meeting Protocol) \u2014 a local v0 developer prototype that lets an existing ACP coding agent participate in a live meeting.",
+  "description": "AMP (Agent Meeting Protocol) \u2014 a meeting channel for agents: give any ACP-speaking coding agent a seat in a live meeting.",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -41,5 +40,24 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.64.0",
     "vitest": "3.2.4"
-  }
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tokencanopy/amp.git"
+  },
+  "homepage": "https://github.com/tokencanopy/amp#readme",
+  "bugs": {
+    "url": "https://github.com/tokencanopy/amp/issues"
+  },
+  "keywords": [
+    "acp",
+    "mcp",
+    "agent",
+    "meeting",
+    "google-meet",
+    "zoom",
+    "coding-agent",
+    "recall.ai"
+  ]
 }

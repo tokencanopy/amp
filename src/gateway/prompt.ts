@@ -5,7 +5,7 @@
  * Two rules shape this file. First, everything the agent reads here is text
  * other people said in a shared room, so it is fenced and labelled with
  * provenance rather than concatenated into the instruction — the same
- * discipline `packages/tc-acp` applies to channel messages. Second, a meeting
+ * discipline a chat integration applies to channel messages. Second, a meeting
  * is an audio medium: a response that is correct but unspeakable (a code
  * block, a URL, forty seconds of list) is a failure. The agent is asked to
  * split its own answer with SPEAK:/CHAT:, and `planSpeech` enforces the split

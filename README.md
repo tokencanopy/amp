@@ -1,39 +1,71 @@
 # AMP — Agent Meeting Protocol
 
-`apps/amp` — a Meeting Channel for Agents.
+**A meeting channel for agents.** Give any ACP-speaking coding agent a seat in a
+live meeting: it hears speaker-attributed transcript, knows when it is being
+addressed, answers out loud, posts detail to the meeting chat, works while the
+conversation continues, and asks a human before it acts.
 
-**Local v0 developer prototype.** It launches agent processes on the machine
-it runs on and has no authentication of its own. It binds to loopback and says
-so on startup. Do not deploy it.
+> **Not** [Sourcegraph's Amp](https://ampcode.com), which is a coding agent.
+> This is the Agent Meeting Protocol — the channel a coding agent joins a
+> meeting through. It composes two existing open protocols rather than defining
+> a wire format of its own (see _What AMP is, precisely_, below).
 
-Your existing coding agent — Codex, Claude Code, Hermes, OpenClaw — stays the
-agent of record. Its model, workspace, instructions, skills, tools, session and
-memory are its own and none of them change. AMP gives it one thing it does not
-have: **a meeting to participate in**. Through that channel it can join a
-meeting, receive speaker-attributed transcript, know when it is being addressed,
-speak or post to meeting chat, work asynchronously while the meeting continues,
-stream progress back to the room, ask a human for approval, read recent context,
-and remember what was decided.
+**Status: v0. Working end to end, and not yet production software.** It has been
+run against a real Google Meet call with a real coding agent answering out loud.
+It also has no authentication of its own, launches processes on the machine it
+runs on, and binds to loopback deliberately. Read _Security_ before exposing it
+to anything.
+
+## What AMP is, precisely
+
+AMP is **not a new wire protocol**. It is a gateway that composes two existing
+ones, pointing in opposite directions, and that is the whole design:
 
 ```
-meeting platform (mock today, Meet/Zoom/Recall later)
-      ⇅  MeetingProvider
-Meeting Gateway  ── attention engine, prompt construction, speech routing
-      ⇅  ACP over stdio (one client, a registry of agents)
-Codex · Claude Code · Hermes · OpenClaw · the built-in fake agent
-      ⇅  MCP over stdio (the agent calls back into the meeting)
+meeting platform            Google Meet · Zoom · Teams, via a bot vendor
+      ⇅  MeetingProvider    six methods; nothing above knows the platform
+Meeting Gateway             attention · prompt · speech · permissions · memory
+      ⇅  ACP                the gateway drives the agent: prompt, stream, cancel
+your coding agent           Claude Code · Codex · anything ACP-speaking
+      ⇅  MCP                the agent drives the meeting: read, chat, speak, remember
 meeting context · chat · speech · memory
 ```
 
-**ACP and MCP point in opposite directions, and that is the design.** ACP is how
-the gateway drives the agent — prompt it, watch it, cancel it. MCP is how the
-agent drives the meeting — read the transcript, post to chat, speak, remember.
-Neither can do the other's job.
+**ACP is how the gateway drives the agent** — prompt it, watch it stream, cancel
+it. **MCP is how the agent drives the meeting** — read the transcript, post to
+chat, speak aloud, remember a decision. Neither can do the other's job, and
+neither is defined here: AMP is the thing in the middle that makes a meeting
+look like something an agent can join.
+
+The consequence worth caring about: **your agent stays your agent.** Its model,
+workspace, instructions, skills, tools, session and memory are its own and none
+of them change. AMP adds the one thing it does not have — a room to be in.
+
+## Runtime-agnostic by construction
+
+An agent, to AMP, is a command whose stdin and stdout speak ACP. That is the
+entire contract, which means **where the agent runs is not AMP's business**:
+
+| the agent runs    | how AMP reaches it                          |
+| ----------------- | ------------------------------------------- |
+| on this machine   | `claude-agent-acp`                          |
+| in a container    | `docker exec -i <worker> claude-agent-acp`  |
+| on another host   | `ssh worker claude-agent-acp`               |
+| in a cluster      | `kubectl exec -i <pod> -- claude-agent-acp` |
+| in your own cloud | any command that bridges stdio to it        |
+
+All of those are one row in `agents.config.json`. No AMP code changes.
+
+**One honest caveat, being fixed:** the reverse direction is not yet portable.
+AMP currently hands the agent its meeting tools as a _local command to spawn_
+plus a loopback URL, which a remote agent can do nothing with. Making MCP an
+HTTP transport with a reachable URL is what finishes this claim, and it is the
+next substantive change. Until then, remote agents get ACP but not the meeting
+tools.
 
 ## Quick start
 
 ```bash
-cd apps/amp
 npm install
 npm run dev            # http://127.0.0.1:4321
 ```
@@ -59,7 +91,7 @@ npm run smoke          # drives the whole slice against the fake agent
 
 ## Commands
 
-Run from `apps/amp/`:
+Run from the repository root:
 
 | Command             | What it does                                                     |
 | ------------------- | ---------------------------------------------------------------- |
@@ -261,7 +293,7 @@ config instead:
   "mcpServers": {
     "meeting": {
       "command": "node",
-      "args": ["/abs/path/to/apps/amp/dist/mcp/bin.js"],
+      "args": ["/abs/path/to/amp/dist/mcp/bin.js"],
       "env": {
         "AMP_MCP_BASE_URL": "http://127.0.0.1:4321",
         "AMP_MCP_MEETING_ID": "mtg_...",

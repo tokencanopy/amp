@@ -1,0 +1,44 @@
+# The full gate, on every push and pull request.
+#
+# No path filters and no matrix: this repository is one Node app, so anything
+# that changes can break anything else, and a check that sometimes does not run
+# is worse than one that always does.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+      # The smoke run drives the whole slice — a real child process, the ACP
+      # handshake, attention, a permission gate and speech routing — against
+      # the built-in fake agent. It catches wiring the unit suites mock past.
+      - run: npm run smoke

@@ -17,7 +17,7 @@ and memory that make the user's existing agent worth having. So the agent stays
 the agent of record and we build **the event loop it does not have**, plus a
 channel it can talk through.
 
-`packages/tc-acp` already does the narrow version of this for Agent Chat — one
+Token Canopy's `tc-acp` does the narrow version of this for agent chat — one
 message, one turn, one reply. This app is the same insight applied to a live
 multiparty conversation, where the hard parts are different: deciding when to
 speak, showing work in progress, keeping the voice separate from the work, and
@@ -102,7 +102,8 @@ mechanically from the written one.
 
 ### 2. Permission requests are never auto-approved
 
-`packages/tc-acp` auto-approves by default, and it is right to: there, the only
+A one-agent-one-owner ACP client can auto-approve by default, and is right to:
+there, the only
 principal who can start a turn is the person the agent answers to, running it on
 their own machine, so a permission prompt is that person's machine asking them
 to confirm what they just asked for.
@@ -177,8 +178,10 @@ meeting, re-validated on every call. Nothing about it is persisted.
 - **Several agents in one meeting.** The gateway is per-meeting with one runtime;
   it would become a map of agent runtimes, and the attention engine would need
   to route by wake name rather than answer yes/no.
-- **Postgres.** If this graduates from prototype, the schema ports to the repo's
-  Drizzle convention; nothing outside `store/` would change.
-- **The design system.** `packages/design-system` is the canonical palette; this
-  app mirrors its tokens locally to stay workspace-independent. Graduating means
-  joining the workspace and deleting the local copy — not hand-syncing it.
+- **A durable database.** SQLite is the v0 escape hatch that lets this run from
+  a clone. Multi-tenant hosting wants Postgres, and the schema is written plainly
+  enough to port: nothing outside `store/` would change.
+- **Portable meeting tools.** MCP is currently handed to the agent as a local
+  command plus a loopback URL, which is the one thing still tying the agent to
+  this machine. An HTTP transport finishes the runtime-agnostic claim the
+  README makes.
