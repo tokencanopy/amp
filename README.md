@@ -1,14 +1,18 @@
 # AMP — Agent Meeting Protocol
 
-**A meeting channel for agents.** Give any ACP-speaking coding agent a seat in a
-live meeting: it hears speaker-attributed transcript, knows when it is being
-addressed, answers out loud, posts detail to the meeting chat, works while the
-conversation continues, and asks a human before it acts.
+**AMP is the Agent Meeting Protocol — the channel a coding agent joins a meeting
+through.**
 
-> **Not** [Sourcegraph's Amp](https://ampcode.com), which is a coding agent.
-> This is the Agent Meeting Protocol — the channel a coding agent joins a
-> meeting through. It composes two existing open protocols rather than defining
-> a wire format of its own (see _What AMP is, precisely_, below).
+Give any ACP-speaking coding agent a seat in a live meeting: it hears
+speaker-attributed transcript, knows when it is being addressed, answers out
+loud, posts detail to the meeting chat, works while the conversation continues,
+and asks a human before it acts.
+
+> Two clarifications the name invites. This is not
+> [Sourcegraph's Amp](https://ampcode.com), which is a coding agent — AMP is
+> what a coding agent joins a meeting _through_. And "protocol" names the
+> channel, not a wire format: it composes two existing open protocols rather
+> than defining one (see _What AMP is, precisely_, below).
 
 **Status: v0. Working end to end, and not yet production software.** It has been
 run against a real Google Meet call with a real coding agent answering out loud.
