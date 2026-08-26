@@ -841,10 +841,9 @@ export function buildApp(deps: BuildAppDependencies): FastifyInstance {
       { websocket: true },
       (socket, request) => {
         const meetingId = request.query.meetingId;
-        if (
-          typeof meetingId !== "string" ||
-          store.getMeeting(meetingId) === null
-        ) {
+        const meeting =
+          typeof meetingId === "string" ? store.getMeeting(meetingId) : null;
+        if (typeof meetingId !== "string" || meeting === null) {
           socket.send(
             JSON.stringify({ type: "error", message: "unknown meeting" }),
           );
@@ -856,6 +855,14 @@ export function buildApp(deps: BuildAppDependencies): FastifyInstance {
           JSON.stringify({
             type: "hello",
             meetingId,
+            // Just enough for a subscriber to name the room it joined. The
+            // speaker page needs this and must NOT need `GET /api/meetings/:id`
+            // to get it: that returns the transcript, chat and memories, and
+            // the page is reachable from the public edge.
+            meeting: {
+              title: meeting.title,
+              agentDisplayName: meeting.agentDisplayName,
+            },
             agent: gateway.snapshot(meetingId),
           }),
         );

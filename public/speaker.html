@@ -340,8 +340,13 @@
 
       function connect() {
         const scheme = location.protocol === "https:" ? "wss" : "ws";
+        // The secret rides along because the public edge requires it on /ws —
+        // the app's own feed has no authentication, and a meeting id alone is
+        // enough to read a room. Harmless when this page is opened directly
+        // on loopback, where there is no edge to satisfy.
         socket = new WebSocket(
-          `${scheme}://${location.host}/ws?meetingId=${encodeURIComponent(meetingId)}`,
+          `${scheme}://${location.host}/ws?meetingId=${encodeURIComponent(meetingId)}` +
+            (secret === "" ? "" : `&secret=${encodeURIComponent(secret)}`),
         );
 
         socket.addEventListener("open", () => {
@@ -362,7 +367,7 @@
             void drain();
             return;
           }
-          if (payload.type === "snapshot" || payload.type === "meeting") {
+          if (payload.type === "hello" || payload.type === "meeting") {
             const meeting = payload.meeting ?? payload;
             if (typeof meeting.title === "string") {
               el("meeting-title").textContent = meeting.title;
@@ -390,22 +395,6 @@
           setStatus("feed socket error");
         });
       }
-
-      // Name the meeting even before the first socket frame, so the tile is
-      // never an anonymous rectangle sitting in someone's call.
-      fetch(`/api/meetings/${encodeURIComponent(meetingId)}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((payload) => {
-          if (payload?.meeting?.title) {
-            el("meeting-title").textContent = payload.meeting.title;
-          }
-          if (payload?.meeting?.agentDisplayName) {
-            el("agent-name").textContent = payload.meeting.agentDisplayName;
-          }
-        })
-        .catch(() => {
-          /* the socket will fill these in */
-        });
 
       connect();
     </script>

@@ -22,7 +22,8 @@
     "test": "vitest run",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "edge": "tsx --env-file-if-exists=.env scripts/public-edge.ts"
   },
   "dependencies": {
     "@fastify/websocket": "11.2.0",
