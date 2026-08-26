@@ -1,0 +1,32 @@
+{
+  "hermes": {
+    "label": "Hermes Agent",
+    "command": "hermes",
+    "args": ["acp"],
+    "description": "Hermes' native ACP mode."
+  },
+  "codex": {
+    "label": "Codex",
+    "command": "npx",
+    "args": ["-y", "@agentclientprotocol/codex-acp"],
+    "description": "Codex through the published ACP adapter."
+  },
+  "claude": {
+    "label": "Claude Code",
+    "command": "claude-agent-acp",
+    "args": [],
+    "description": "Installed by @agentclientprotocol/claude-agent-acp. The @zed-industries/claude-code-acp package installs a claude-code-acp bin instead — set whichever you have."
+  },
+  "openclaw": {
+    "label": "OpenClaw",
+    "command": "openclaw",
+    "args": ["acp"],
+    "description": "Command name unverified; adjust to match your build."
+  },
+  "goose": {
+    "label": "goose",
+    "command": "goose",
+    "args": ["acp"],
+    "description": "Example of adding an agent this repo does not ship a default for."
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "@tokencanopy/amp",
+  "version": "0.0.1",
+  "private": true,
+  "description": "AMP (Agent Meeting Protocol) \u2014 a local v0 developer prototype that lets an existing ACP coding agent participate in a live meeting.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "amp-mcp": "dist/mcp/bin.js",
+    "amp-fake-acp-agent": "dist/fake-agent/bin.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "db:init": "tsx scripts/db-init.ts",
+    "seed": "tsx scripts/seed.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@fastify/websocket": "11.2.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "fastify": "5.10.0",
+    "fastify-type-provider-zod": "7.0.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.2.0",
+    "@types/ws": "8.18.1",
+    "eslint": "9.39.5",
+    "prettier": "3.9.5",
+    "tsx": "4.23.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.64.0",
+    "vitest": "3.2.4"
+  }
+}

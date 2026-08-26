@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AMP — Agent Meeting Protocol (local v0 prototype)</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="tc-root">
+    <p class="banner" role="note">
+      <strong>Local v0 developer prototype.</strong> This app launches agent
+      processes on this machine and has no authentication. Bound to loopback —
+      do not expose it.
+    </p>
+
+    <header class="site-header">
+      <h1>AMP <span class="subtitle">Agent Meeting Protocol</span></h1>
+      <p class="lede">
+        Your existing coding agent keeps its model, workspace, instructions,
+        skills, tools, session and memory. This adds a meeting to talk through.
+      </p>
+    </header>
+
+    <main>
+      <!-- ---------- SETUP ---------- -->
+      <section id="setup" class="panel" aria-labelledby="setup-heading">
+        <h2 id="setup-heading">Set up a meeting</h2>
+        <form id="setup-form">
+          <div class="grid">
+            <p class="field">
+              <label for="meeting-title">Meeting title</label>
+              <input
+                id="meeting-title"
+                name="title"
+                type="text"
+                required
+                value="Weekly product sync"
+              />
+            </p>
+
+            <p class="field">
+              <label for="agent-select">ACP agent</label>
+              <select id="agent-select" name="agentId"></select>
+              <span class="hint" id="agent-description"></span>
+            </p>
+
+            <p class="field">
+              <label for="agent-command">Command that will be launched</label>
+              <output id="agent-command" class="command"></output>
+              <span class="hint">
+                Arguments are passed as a vector — never through a shell.
+                <button type="button" id="check-agent" class="link">
+                  Check this agent is installed
+                </button>
+                <span id="agent-check" role="status"></span>
+              </span>
+            </p>
+
+            <p class="field">
+              <label for="workspace-path">Workspace path (agent cwd)</label>
+              <input id="workspace-path" name="workspacePath" type="text" />
+            </p>
+
+            <p class="field">
+              <label for="agent-name">Agent display name in the meeting</label>
+              <input
+                id="agent-name"
+                name="agentDisplayName"
+                type="text"
+                value="Cofounder"
+              />
+            </p>
+
+            <p class="field">
+              <label for="wake-names">Wake names (comma separated)</label>
+              <input
+                id="wake-names"
+                name="wakeNames"
+                type="text"
+                value="cofounder, codex, claude"
+              />
+              <span class="hint">
+                The agent answers only when one of these is used to address it
+                directly, or when an utterance is explicitly marked.
+              </span>
+            </p>
+
+            <p class="field field-wide">
+              <label for="participants">Simulated participants</label>
+              <input
+                id="participants"
+                name="participants"
+                type="text"
+                value="Ada (founder), Grace (engineer), Lin (design)"
+              />
+            </p>
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="btn btn-primary">
+              Create &amp; start meeting
+            </button>
+            <button type="button" id="load-existing" class="btn">
+              Reopen last meeting
+            </button>
+          </div>
+        </form>
+        <p id="setup-error" class="error" role="alert" hidden></p>
+      </section>
+
+      <!-- ---------- MEETING ---------- -->
+      <div id="meeting" hidden>
+        <section class="panel meeting-bar" aria-label="Meeting status">
+          <div>
+            <h2 id="meeting-title-display"></h2>
+            <p class="hint">
+              <span id="meeting-status-display"></span> · topic:
+              <span id="meeting-topic">—</span> ·
+              <span id="meeting-id" class="mono"></span>
+            </p>
+          </div>
+          <div class="status-cluster">
+            <p class="agent-status" id="agent-status" role="status">
+              <span class="dot" aria-hidden="true"></span>
+              <span id="agent-status-text">disconnected</span>
+            </p>
+            <button type="button" id="connect-agent" class="btn btn-primary">
+              Launch agent
+            </button>
+            <button type="button" id="cancel-work" class="btn">
+              Cancel agent work
+            </button>
+            <button type="button" id="stop-speech" class="btn">
+              Stop speaking
+            </button>
+            <button type="button" id="end-meeting" class="btn btn-danger">
+              End meeting
+            </button>
+          </div>
+        </section>
+
+        <div class="columns">
+          <!-- room -->
+          <section class="panel" aria-labelledby="room-heading">
+            <h3 id="room-heading">Meeting room</h3>
+
+            <h4>Participants</h4>
+            <ul id="participants-list" class="participants"></ul>
+
+            <h4>Transcript</h4>
+            <ol
+              id="transcript"
+              class="transcript"
+              aria-live="polite"
+              aria-relevant="additions"
+            ></ol>
+
+            <form id="utterance-form" class="composer">
+              <p class="field">
+                <label for="speaker-select">Speaking as</label>
+                <select id="speaker-select"></select>
+              </p>
+              <p class="field">
+                <label for="utterance-text">Say something</label>
+                <textarea
+                  id="utterance-text"
+                  rows="2"
+                  placeholder="Cofounder, what do you think?"
+                  required
+                ></textarea>
+              </p>
+              <p class="field-inline">
+                <label>
+                  <input type="checkbox" id="addressed" />
+                  Address the agent explicitly
+                </label>
+                <label>
+                  <input type="checkbox" id="as-chat" />
+                  Send as meeting chat
+                </label>
+              </p>
+              <button type="submit" class="btn btn-primary">Send</button>
+            </form>
+
+            <h4>Meeting chat</h4>
+            <ol id="chat" class="chat" aria-live="polite"></ol>
+          </section>
+
+          <!-- agent activity -->
+          <section class="panel" aria-labelledby="activity-heading">
+            <h3 id="activity-heading">Agent activity</h3>
+
+            <dl class="facts">
+              <dt>ACP session</dt>
+              <dd id="acp-session" class="mono">—</dd>
+              <dt>Capabilities</dt>
+              <dd id="acp-capabilities">—</dd>
+              <dt>Command</dt>
+              <dd id="acp-command" class="mono">—</dd>
+            </dl>
+
+            <h4>Permission requests</h4>
+            <ul id="permissions" class="permissions">
+              <li class="empty">
+                Nothing waiting. Requests are never auto-approved.
+              </li>
+            </ul>
+
+            <h4>Response stream</h4>
+            <pre id="agent-stream" class="stream" aria-live="polite"></pre>
+
+            <h4>Turn &amp; tool activity</h4>
+            <ol id="acp-events" class="events"></ol>
+
+            <h4>Diagnostics</h4>
+            <ol id="logs" class="logs"></ol>
+          </section>
+
+          <!-- memory + speech -->
+          <section class="panel" aria-labelledby="memory-heading">
+            <h3 id="memory-heading">Memory</h3>
+
+            <form id="memory-form" class="composer">
+              <p class="field">
+                <label for="memory-kind">Kind</label>
+                <select id="memory-kind">
+                  <option value="decision">Decision</option>
+                  <option value="action_item">Action item</option>
+                  <option value="fact">Fact</option>
+                  <option value="note">Note</option>
+                </select>
+              </p>
+              <p class="field">
+                <label for="memory-content">Content</label>
+                <textarea id="memory-content" rows="2" required></textarea>
+              </p>
+              <p class="field">
+                <label for="memory-source">Source transcript entry</label>
+                <select id="memory-source">
+                  <option value="">(none)</option>
+                </select>
+              </p>
+              <button type="submit" class="btn">Remember</button>
+            </form>
+
+            <ul id="memories" class="memories"></ul>
+
+            <h3>Speech</h3>
+            <p class="field-inline">
+              <label>
+                <input type="checkbox" id="speech-enabled" checked />
+                Speak agent responses
+              </label>
+            </p>
+            <p class="field">
+              <label for="voice-select">Voice</label>
+              <select id="voice-select"></select>
+            </p>
+            <p class="hint" id="speaking-indicator" role="status">Silent.</p>
+            <p class="hint">
+              Speech is browser <code>speechSynthesis</code>. Stopping speech
+              never cancels agent work — those are separate buttons on purpose.
+            </p>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
