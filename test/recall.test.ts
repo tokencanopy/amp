@@ -869,3 +869,48 @@ describe("the machine the speaker page runs on", () => {
     expect(body.variant?.google_meet).toBe("web_gpu");
   });
 });
+
+describe("a bot that outlived the server", () => {
+  /**
+   * The failure this prevents happened twice in one evening of live testing.
+   * Provider runtimes are in memory and meetings are in SQLite, so restarting
+   * the server — which any code change does — left the bot sitting in the
+   * call with nothing holding its handle. Ending the meeting could only shrug
+   * and tell the operator to go and clean up in the vendor dashboard, so the
+   * next dispatch put a SECOND bot in the same call while the first was still
+   * recording.
+   */
+  it("removes a bot dispatched before the restart", async () => {
+    const first = makeProvider({ speakerUrl: "https://speaker.test" });
+    const meeting = await liveMeeting(first.provider);
+
+    // A new provider over the same store is exactly what a restart leaves:
+    // the meeting is still there, the runtime is not.
+    const second = makeProvider();
+    await second.provider.endMeeting(meeting.id);
+
+    const left = second.calls.find((call) => call.url.includes("/leave_call/"));
+    expect(left).toBeDefined();
+    expect(left!.url).toContain("bot_123");
+    expect(store.requireMeeting(meeting.id).status).toBe("ended");
+  });
+
+  it("still ends a meeting that never had a bot", async () => {
+    const { provider } = makeProvider();
+    const meeting = await provider.createMeeting({
+      title: "Retry policy sync",
+      agentDisplayName: "Cofounder",
+      wakeNames: ["cofounder"],
+      participants: [],
+      meetingUrl: "https://meet.google.com/abc-defg-hij",
+    } as Parameters<typeof provider.createMeeting>[0]);
+
+    const fresh = makeProvider();
+    await fresh.provider.endMeeting(meeting.id);
+
+    expect(fresh.calls.some((call) => call.url.includes("/leave_call/"))).toBe(
+      false,
+    );
+    expect(store.requireMeeting(meeting.id).status).toBe("ended");
+  });
+});

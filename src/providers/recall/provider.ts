@@ -330,8 +330,43 @@ export class RecallMeetingProvider implements MeetingProvider {
       body: request,
     });
     runtime.botId = bot.id;
+    // Written down, not just held: this handle is the only way to get the bot
+    // back out of the call, and the runtime holding it does not survive a
+    // restart. See endMeeting.
+    this.#store.setProviderBotId(meetingId, bot.id);
     this.#store.setMeetingStatus(meetingId, "live");
     this.#log(`recall bot ${bot.id} dispatched to ${runtime.meetingUrl}`);
+  }
+
+  /**
+   * Take the bot out of the call.
+   *
+   * A bot left running is a recording device nobody is watching, so a failure
+   * to remove it is loud. The one exception is a bot that has ALREADY left:
+   * the vendor pulls it the moment a call empties and then rejects further
+   * commands with `cannot_command_unstarted_bot`. Treating that as an error
+   * once left meetings stuck `live` forever — the end was refused precisely
+   * when the bot was already gone.
+   */
+  async #removeBot(botId: string): Promise<void> {
+    try {
+      await this.#call(RECALL_PATHS.leaveCall.replace("{id}", botId), {
+        method: "POST",
+      });
+    } catch (error) {
+      const gone =
+        error instanceof RecallApiError &&
+        error.message.includes("cannot_command_unstarted_bot");
+      if (!gone) {
+        this.#log(
+          `FAILED to remove bot ${botId} from the call: ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        );
+        throw error;
+      }
+      this.#log(`bot ${botId} had already left the call`);
+    }
   }
 
   async endMeeting(meetingId: string): Promise<void> {
@@ -340,49 +375,30 @@ export class RecallMeetingProvider implements MeetingProvider {
     // refusing to end those made them permanently un-endable — stuck `live`
     // with no way back. The store is the durable record, so it wins.
     //
-    // The bot id went with the runtime, so its fate is genuinely unknown
-    // here. That is said out loud rather than implied: a bot still sitting in
-    // a call is a recording device nobody is watching, and the operator needs
-    // to know to check.
+    // The bot id no longer goes with the runtime. It used to, and the result
+    // was that a restart stranded whatever was in the call: nothing local
+    // knew the handle any more, so ending the meeting told the operator to go
+    // and clean up by hand. In practice that meant a second bot joining the
+    // next dispatch while the first was still sitting there recording.
     const runtime = this.#runtimes.get(meetingId);
     if (runtime === undefined) {
-      this.#log(
-        `ending ${meetingId} with no live runtime (this server restarted). ` +
-          "If a bot was in the call, remove it from the Recall dashboard.",
-      );
+      const stranded = this.#store.providerBotId(meetingId);
+      if (stranded !== null) {
+        this.#log(
+          `ending ${meetingId} after a restart; removing bot ${stranded}`,
+        );
+        await this.#removeBot(stranded);
+      } else {
+        this.#log(
+          `ending ${meetingId} with no live runtime and no bot on record`,
+        );
+      }
+      this.#store.setProviderBotId(meetingId, null);
       this.#store.setMeetingStatus(meetingId, "ended");
       return;
     }
-    if (runtime.botId !== null) {
-      // A bot left running is a recording device nobody is watching, so a
-      // failure to leave is logged loudly rather than swallowed.
-      try {
-        await this.#call(
-          RECALL_PATHS.leaveCall.replace("{id}", runtime.botId),
-          { method: "POST" },
-        );
-      } catch (error) {
-        // A bot that has ALREADY left is the normal case, not a failure: the
-        // vendor pulls it the moment a call empties, and it then rejects
-        // further commands with `cannot_command_unstarted_bot`. Treating that
-        // as an error left every meeting stuck `live` forever — the end was
-        // refused precisely when the bot was already gone.
-        const gone =
-          error instanceof RecallApiError &&
-          error.message.includes("cannot_command_unstarted_bot");
-        if (!gone) {
-          // Anything else means a recording device may still be in someone's
-          // call, which is worth failing loudly for.
-          this.#log(
-            `FAILED to remove bot ${runtime.botId} from the call: ${
-              error instanceof Error ? error.message : "unknown error"
-            }`,
-          );
-          throw error;
-        }
-        this.#log(`bot ${runtime.botId} had already left the call`);
-      }
-    }
+    if (runtime.botId !== null) await this.#removeBot(runtime.botId);
+    this.#store.setProviderBotId(meetingId, null);
     this.#store.setMeetingStatus(meetingId, "ended");
     runtime.queue.push({ type: "meeting_ended", meetingId, at: this.#now() });
     runtime.queue.close();

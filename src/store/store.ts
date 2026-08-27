@@ -188,6 +188,27 @@ export class MeetingStore {
     return row === undefined ? null : toMeeting(row);
   }
 
+  /**
+   * Remember what the provider put in the call.
+   *
+   * Provider runtimes are in memory; meetings are not. Without this a restart
+   * loses the only handle on a live bot, and nothing can remove it.
+   */
+  setProviderBotId(id: string, botId: string | null): void {
+    this.db
+      .prepare("UPDATE meetings SET provider_bot_id = ? WHERE id = ?")
+      .run(botId, id);
+  }
+
+  /** The provider's handle on this meeting's bot, if one was recorded. */
+  providerBotId(id: string): string | null {
+    const row = this.db
+      .prepare("SELECT provider_bot_id FROM meetings WHERE id = ?")
+      .get(id) as { provider_bot_id?: string | null } | undefined;
+    const value = row?.provider_bot_id;
+    return typeof value === "string" && value !== "" ? value : null;
+  }
+
   setMeetingStatus(id: string, status: Meeting["status"]): Meeting {
     const now = new Date().toISOString();
     if (status === "live") {

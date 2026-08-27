@@ -29,7 +29,12 @@ CREATE TABLE IF NOT EXISTS meetings (
   summary            TEXT,
   created_at         TEXT NOT NULL,
   started_at         TEXT,
-  ended_at           TEXT
+  ended_at           TEXT,
+  -- The provider's handle on whatever it put in the call. Persisted because
+  -- provider runtimes live in memory: without this, a restart loses the only
+  -- way to remove a bot, and a recording device stays in someone's meeting
+  -- with nothing able to pull it out.
+  provider_bot_id    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS participants (
@@ -124,6 +129,15 @@ export function openDatabase(path: string): DatabaseSync {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  // Databases created before provider_bot_id existed. SQLite has no
+  // ADD COLUMN IF NOT EXISTS, and re-adding throws, so the existing columns
+  // are read first.
+  const columns = db
+    .prepare("PRAGMA table_info(meetings)")
+    .all() as { name: string }[];
+  if (!columns.some((column) => column.name === "provider_bot_id")) {
+    db.exec("ALTER TABLE meetings ADD COLUMN provider_bot_id TEXT;");
+  }
   return db;
 }
 
