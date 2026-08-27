@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AMP — Agent Meeting Protocol: the Meeting Channel for Agents.
+ * AMP — Agent Meeting Proxy: the Meeting Channel for Agents.
  *
  * A LOCAL DEVELOPER PROTOTYPE (v0). It launches processes on the machine it
  * runs on and has no authentication of its own, which is why it binds to

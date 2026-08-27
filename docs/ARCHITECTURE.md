@@ -1,4 +1,4 @@
-# Architecture — AMP (Agent Meeting Protocol)
+# Architecture — AMP (Agent Meeting Proxy)
 
 Why the pieces are where they are. The README says how to run it; this says why
 it is shaped this way, and what the load-bearing decisions were.

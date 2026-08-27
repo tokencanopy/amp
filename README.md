@@ -1,6 +1,6 @@
-# AMP — Agent Meeting Protocol
+# AMP — Agent Meeting Proxy
 
-**AMP is the Agent Meeting Protocol — the channel a coding agent joins a meeting
+**AMP is the Agent Meeting Proxy — the channel a coding agent joins a meeting
 through.**
 
 Give any ACP-speaking coding agent a seat in a live meeting: it hears
@@ -8,9 +8,9 @@ speaker-attributed transcript, knows when it is being addressed, answers out
 loud, posts detail to the meeting chat, works while the conversation continues,
 and asks a human before it changes anything.
 
-> "Protocol" here names the channel, not a wire format: AMP composes two
-> existing open protocols rather than defining one (see _What AMP is,
-> precisely_, below).
+> A proxy, not a protocol: AMP defines no wire format of its own. It stands
+> between two that already exist — ACP toward your agent, MCP toward the
+> meeting — and that is exactly what the name claims.
 
 **Status: v0. Working end to end, and not yet production software.** It has been
 run against a real Google Meet call with a real coding agent answering out loud.
@@ -20,8 +20,8 @@ to anything.
 
 ## What AMP is, precisely
 
-AMP is **not a new wire protocol**. It is a gateway that composes two existing
-ones, pointing in opposite directions, and that is the whole design:
+AMP is **not a new wire protocol**. It is a proxy between two existing ones
+pointing in opposite directions, and that is the whole design:
 
 ```
 meeting platform            Google Meet · Zoom · Teams, via a bot vendor

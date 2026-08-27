@@ -1,7 +1,7 @@
 {
   "name": "@tokencanopy/amp",
   "version": "0.0.1",
-  "description": "AMP (Agent Meeting Protocol) \u2014 a meeting channel for agents: give any ACP-speaking coding agent a seat in a live meeting.",
+  "description": "AMP (Agent Meeting Proxy) \u2014 a meeting channel for agents: give any ACP-speaking coding agent a seat in a live meeting.",
   "type": "module",
   "engines": {
     "node": ">=22"
