@@ -274,11 +274,50 @@
         return audioCtx;
       }
 
+      /**
+       * Where the audible part of a clip begins and ends.
+       *
+       * A synthesizer pads every utterance with silence — measured on real
+       * ElevenLabs output: ~92ms before the first word, and 166ms to 386ms
+       * after the last. Scheduling clips edge to edge therefore still leaves a
+       * quarter to half a second of dead air at every sentence boundary, and
+       * because the tail varies, the pause is a different length each time.
+       * Irregular pauses read as a system struggling; regular ones read as
+       * someone speaking.
+       */
+      function audibleRange(buffer) {
+        const data = buffer.getChannelData(0);
+        const threshold = 0.01;
+        let first = 0;
+        while (first < data.length && Math.abs(data[first]) < threshold) {
+          first += 1;
+        }
+        let last = data.length - 1;
+        while (last > first && Math.abs(data[last]) < threshold) {
+          last -= 1;
+        }
+        if (first >= last) return { offset: 0, duration: buffer.duration };
+        return {
+          offset: first / buffer.sampleRate,
+          duration: (last - first) / buffer.sampleRate,
+        };
+      }
+
+      /**
+       * A deliberate beat between sentences.
+       *
+       * Not zero: speech with no pause at a full stop sounds hurried and runs
+       * clauses together. This replaces a variable 258-478ms of accidental
+       * dead air with one consistent short breath.
+       */
+      const SENTENCE_PAUSE_SECONDS = 0.09;
+
       async function scheduleBlob(blob) {
         const ctx = ensureContext();
         if (ctx === null) throw new Error("no Web Audio support");
 
         const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+        const { offset, duration } = audibleRange(decoded);
         const source = ctx.createBufferSource();
         source.buffer = decoded;
         source.connect(ctx.destination);
@@ -286,8 +325,10 @@
         // A small lead so scheduling never lands in the past, which would
         // drop the clip silently.
         const startAt = Math.max(ctx.currentTime + 0.02, nextStart);
-        source.start(startAt);
-        nextStart = startAt + decoded.duration;
+        // Start at the first real sample and run only for the audible span,
+        // so neither the clip's own padding reaches the call.
+        source.start(startAt, offset, duration);
+        nextStart = startAt + duration + SENTENCE_PAUSE_SECONDS;
 
         if (ctx.state !== "running") {
           audioBlocked = true;
@@ -296,7 +337,7 @@
           setStatus(`audio context is ${ctx.state}; the call cannot hear this`);
         }
 
-        return { startAt, endAt: nextStart, ctx };
+        return { startAt, endAt: startAt + duration, ctx };
       }
 
       function speakLocally(text) {
