@@ -77,6 +77,9 @@ export function createServer(
           ...(config.recall.speakerVoice === undefined
             ? {}
             : { speakerVoice: config.recall.speakerVoice }),
+          ...(config.recall.transcriptLanguage === undefined
+            ? {}
+            : { transcriptLanguage: config.recall.transcriptLanguage }),
           botName: config.recall.botName,
         },
       })

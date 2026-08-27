@@ -69,7 +69,13 @@ const schema = z.object({
   AMP_RECALL_SPEAKER_URL: blankIsUnset,
   /** A macOS `say` voice for the speaker page. Unknown names fall back. */
   AMP_RECALL_SPEAKER_VOICE: blankIsUnset,
+  /** Transcription language. Only English can use low-latency mode. */
+  AMP_RECALL_TRANSCRIPT_LANGUAGE: blankIsUnset,
   AMP_RECALL_BOT_NAME: z.string().default("AMP cofounder"),
+  // --- ElevenLabs (optional; the local voice is the default) ---------------
+  AMP_ELEVENLABS_API_KEY: blankIsUnset,
+  AMP_ELEVENLABS_VOICE_ID: blankIsUnset,
+  AMP_ELEVENLABS_MODEL_ID: blankIsUnset,
   AMP_LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
@@ -93,9 +99,15 @@ export interface AppConfig {
     webhookSecret: string | undefined;
     speakerUrl: string | undefined;
     speakerVoice: string | undefined;
+    transcriptLanguage: string | undefined;
     botName: string;
   };
   logLevel: string;
+  elevenLabs: {
+    apiKey: string | undefined;
+    voiceId: string | undefined;
+    modelId: string | undefined;
+  };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -124,7 +136,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       webhookSecret: parsed.AMP_RECALL_WEBHOOK_SECRET,
       speakerUrl: parsed.AMP_RECALL_SPEAKER_URL,
       speakerVoice: parsed.AMP_RECALL_SPEAKER_VOICE,
+      transcriptLanguage: parsed.AMP_RECALL_TRANSCRIPT_LANGUAGE,
       botName: parsed.AMP_RECALL_BOT_NAME,
+    },
+    elevenLabs: {
+      apiKey: parsed.AMP_ELEVENLABS_API_KEY,
+      voiceId: parsed.AMP_ELEVENLABS_VOICE_ID,
+      modelId: parsed.AMP_ELEVENLABS_MODEL_ID,
     },
     logLevel: parsed.AMP_LOG_LEVEL,
   };

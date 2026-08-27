@@ -814,9 +814,18 @@ export function buildApp(deps: BuildAppDependencies): FastifyInstance {
         const audio = await synthesizeSpeech(request.body.text, {
           voice: request.body.voice,
           rate: request.body.rate,
+          elevenLabsApiKey: config.elevenLabs.apiKey,
+          elevenLabsVoiceId: config.elevenLabs.voiceId,
+          elevenLabsModelId: config.elevenLabs.modelId,
         });
+        // ID3 or an MPEG frame sync means ElevenLabs answered; the local
+        // path returns AAC in an MP4 container. The speaker page decodes
+        // whichever it is given, but the header must not lie about it.
+        const isMp3 =
+          audio.subarray(0, 3).toString("ascii") === "ID3" ||
+          (audio[0] === 0xff && ((audio[1] ?? 0) & 0xe0) === 0xe0);
         return reply
-          .header("content-type", "audio/mp4")
+          .header("content-type", isMp3 ? "audio/mpeg" : "audio/mp4")
           .header("cache-control", "no-store")
           .send(audio);
       } catch (error) {

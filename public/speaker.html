@@ -224,6 +224,7 @@
             audioBlocked = false;
             el("blocked").hidden = true;
             setStatus("audio unblocked by interaction");
+            if (audioCtx !== null) void audioCtx.resume();
             void drain();
           },
           { passive: true },
@@ -246,40 +247,56 @@
         return await response.blob();
       }
 
-      function playBlob(blob) {
-        return new Promise((resolve) => {
-          const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
-          audio.autoplay = true;
-          const done = () => {
-            URL.revokeObjectURL(url);
-            resolve();
-          };
-          audio.addEventListener("ended", done, { once: true });
-          audio.addEventListener("error", () => {
-            setStatus("audio element failed to play the synthesized clip");
-            done();
-          });
-          audio.ontimeupdate = () => {
-            if (audio.duration > 0) {
-              el("bar").style.width =
-                `${(audio.currentTime / audio.duration) * 100}%`;
-            }
-          };
-          audio.play().catch((error) => {
-            // Autoplay refused. Recall launches its output-media browser to
-            // stream page audio, so it permits this — but that is the one link
-            // in the chain this app cannot verify from here, and if it is ever
-            // wrong the agent is mute in a live call. So it is announced in
-            // the tile itself, where a participant can see it, rather than
-            // only in a console nobody is reading.
-            audioBlocked = true;
-            el("blocked").hidden = false;
-            setState("error");
-            setStatus(`autoplay refused: ${error.message}`);
-            done();
-          });
-        });
+      /**
+       * Schedule a clip on one continuous audio timeline.
+       *
+       * Sequential <audio> elements cannot sound continuous: each swap costs
+       * a beat to create, decode and start, and that beat lands exactly at a
+       * sentence boundary where a listener is most likely to hear it. Web
+       * Audio schedules by absolute time instead, so clip two begins at the
+       * precise sample clip one ends on.
+       *
+       * `nextStart` is the running edge of that timeline. When audio arrives
+       * faster than it plays, clips queue seamlessly behind it; when it
+       * arrives late, the edge has already passed and the clip plays at once
+       * rather than waiting for a slot that is gone.
+       */
+      let audioCtx = null;
+      let nextStart = 0;
+
+      function ensureContext() {
+        if (audioCtx === null) {
+          const Ctor = window.AudioContext ?? window.webkitAudioContext;
+          if (Ctor === undefined) return null;
+          audioCtx = new Ctor();
+        }
+        if (audioCtx.state === "suspended") void audioCtx.resume();
+        return audioCtx;
+      }
+
+      async function scheduleBlob(blob) {
+        const ctx = ensureContext();
+        if (ctx === null) throw new Error("no Web Audio support");
+
+        const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+        const source = ctx.createBufferSource();
+        source.buffer = decoded;
+        source.connect(ctx.destination);
+
+        // A small lead so scheduling never lands in the past, which would
+        // drop the clip silently.
+        const startAt = Math.max(ctx.currentTime + 0.02, nextStart);
+        source.start(startAt);
+        nextStart = startAt + decoded.duration;
+
+        if (ctx.state !== "running") {
+          audioBlocked = true;
+          el("blocked").hidden = false;
+          setState("error");
+          setStatus(`audio context is ${ctx.state}; the call cannot hear this`);
+        }
+
+        return { startAt, endAt: nextStart, ctx };
       }
 
       function speakLocally(text) {
@@ -299,32 +316,66 @@
         });
       }
 
+      /**
+       * Fetch a sentence's audio the moment it arrives, NOT when it is its
+       * turn to play.
+       *
+       * Serialising fetch-then-play cost a full synthesis plus a round trip
+       * of dead air at every sentence boundary — measured at ~500ms of
+       * synthesis alone, before the tunnel. A four-sentence answer stopped
+       * and restarted three times, which is what "stuttering" was.
+       *
+       * Each entry is a PROMISE of a blob, queued in arrival order, so
+       * sentence two is already synthesized and downloaded by the time
+       * sentence one finishes playing.
+       */
+      function enqueue(text) {
+        const pending = serverTtsWorks
+          ? fetchSpeech(text).catch((error) => {
+              // Demote for the rest of the session rather than retrying a
+              // path that is already known to be broken.
+              serverTtsWorks = false;
+              setStatus(`server tts failed (${error.message}); falling back`);
+              return null;
+            })
+          : Promise.resolve(null);
+        queue.push({ text, audio: pending });
+        void drain();
+      }
+
       async function drain() {
         if (draining) return;
         draining = true;
         while (queue.length > 0) {
-          const text = queue.shift();
-          el("said").textContent = text;
-          setState("speaking");
-          el("bar").style.width = "0%";
+          const { text, audio } = queue.shift();
           try {
-            if (serverTtsWorks) {
-              const blob = await fetchSpeech(text);
-              setStatus(`speaking ${blob.size} bytes of synthesized audio`);
-              await playBlob(blob);
-            } else {
+            const blob = await audio;
+            if (blob === null) {
               await speakLocally(text);
+              continue;
             }
+            const { startAt, endAt, ctx } = await scheduleBlob(blob);
+            // The tile should show a sentence WHILE it is heard, not when it
+            // was scheduled — those differ by however much is queued ahead.
+            const lead = Math.max(0, (startAt - ctx.currentTime) * 1000);
+            setTimeout(() => {
+              el("said").textContent = text;
+              setState("speaking");
+            }, lead);
+            setTimeout(
+              () => {
+                if (queue.length === 0) setState("idle");
+              },
+              Math.max(0, (endAt - ctx.currentTime) * 1000),
+            );
+            setStatus(
+              `queued ${String(Math.round((endAt - ctx.currentTime) * 100) / 100)}s of speech`,
+            );
           } catch (error) {
-            // First failure demotes to the local voice for the rest of the
-            // session rather than retrying the same broken path every turn.
-            serverTtsWorks = false;
-            setStatus(`server tts failed (${error.message}); falling back`);
             setState("error");
+            setStatus(`could not speak: ${error.message}`);
             await speakLocally(text);
           }
-          el("bar").style.width = "0%";
-          setState("idle");
         }
         draining = false;
       }
@@ -363,8 +414,9 @@
             return;
           }
           if (payload.type === "speak" && typeof payload.text === "string") {
-            queue.push(payload.text);
-            void drain();
+            // Enqueue starts synthesis NOW, while whatever is playing keeps
+            // playing — that overlap is the whole point.
+            enqueue(payload.text);
             return;
           }
           if (payload.type === "hello" || payload.type === "meeting") {

@@ -23,6 +23,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
 
+import { ElevenLabsError, synthesizeWithElevenLabs } from "./elevenlabs.js";
+
 /** Longer than any single spoken section `planSpeech` will emit. */
 export const MAX_TTS_CHARS = 1_200;
 
@@ -34,6 +36,10 @@ export class TtsUnavailableError extends Error {
 }
 
 export interface TtsOptions {
+  /** When set, a neural voice is used in preference to the local one. */
+  elevenLabsApiKey?: string | undefined;
+  elevenLabsVoiceId?: string | undefined;
+  elevenLabsModelId?: string | undefined;
   /** A `say` voice name. Unknown names are rejected by `say` itself. */
   voice?: string | undefined;
   /** Words per minute. `say` defaults to about 175. */
@@ -102,6 +108,26 @@ export async function synthesizeSpeech(
   text: string,
   options: TtsOptions = {},
 ): Promise<Buffer> {
+  // A neural voice when one is configured. It is tried FIRST and falls back
+  // rather than the reverse: a vendor that is slow, rate-limited or down must
+  // cost the room a worse voice, never its voice.
+  if (options.elevenLabsApiKey !== undefined) {
+    try {
+      return await synthesizeWithElevenLabs(text, {
+        apiKey: options.elevenLabsApiKey,
+        voiceId: options.elevenLabsVoiceId,
+        modelId: options.elevenLabsModelId,
+      });
+    } catch (error) {
+      if (!(error instanceof ElevenLabsError)) throw error;
+      // Deliberately not fatal, and deliberately loud: the operator should be
+      // able to see in the log why the voice changed mid-meeting.
+      console.warn(
+        `[tts] ElevenLabs failed, using the local voice: ${error.message}`,
+      );
+    }
+  }
+
   if (!ttsAvailable()) {
     throw new TtsUnavailableError(
       `local speech synthesis needs macOS \`say\`; this host is ${platform}`,

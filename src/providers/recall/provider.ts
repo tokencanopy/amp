@@ -58,6 +58,8 @@ export interface RecallConfig {
   speakerUrl?: string;
   /** A `say` voice for that page to request. Unknown names fall back. */
   speakerVoice?: string;
+  /** BCP-47 language for transcription. Non-English forfeits low latency. */
+  transcriptLanguage?: string;
   botName?: string;
 }
 
@@ -153,6 +155,34 @@ export class RecallMeetingProvider implements MeetingProvider {
    * It carries the shared secret because the page fetches synthesized audio
    * back from this host, and that route is refused without it.
    */
+  /**
+   * How the vendor should transcribe, given what it will actually accept.
+   *
+   * Two settings that look independent are not. `prioritize_low_latency` uses
+   * real-time models — the default, `prioritize_accuracy`, uses async
+   * pre-recorded ones and makes a live room wait — but the vendor rejects the
+   * fast mode outright for any language other than English:
+   *
+   *   "language_code other than english is not supported in low latency mode"
+   *
+   * That 400 arrives when the bot is dispatched, which is the worst moment to
+   * discover it: a meeting is already open and waiting. So the pairing is
+   * resolved here instead. English gets the fast path; anything else, including
+   * the vendor's own `auto`, falls back to accuracy rather than being sent as a
+   * combination that cannot work.
+   *
+   * `auto` is also worth avoiding on its own merits. Measured on a live call,
+   * auto-detection on mixed Chinese and English rendered whole English
+   * questions as one unbroken token — "canyoutellmemorehowyouareimplemented" —
+   * and that is what reached the agent as the question.
+   */
+  #transcription(): Record<string, string> {
+    const language = this.#config.transcriptLanguage ?? "en";
+    return language.toLowerCase().startsWith("en")
+      ? { language_code: language, mode: "prioritize_low_latency" }
+      : { language_code: language, mode: "prioritize_accuracy" };
+  }
+
   #speakerPageUrl(meetingId: string, speakerUrl: string): string {
     const url = new URL(speakerUrl);
     url.searchParams.set("meetingId", meetingId);
@@ -231,16 +261,7 @@ export class RecallMeetingProvider implements MeetingProvider {
       meeting_url: runtime.meetingUrl,
       bot_name: this.#config.botName ?? "AMP cofounder",
       recording_config: {
-        transcript: {
-          provider: {
-            // Recall's DEFAULT is prioritize_accuracy, which its own docs
-            // describe as using async, non-real-time transcription models —
-            // so a meeting bot left on the default is transcribing offline
-            // and the room waits for it. This is a live conversation; a word
-            // that arrives late is worth more than a word that arrives right.
-            recallai_streaming: { mode: "prioritize_low_latency" },
-          },
-        },
+        transcript: { provider: { recallai_streaming: this.#transcription() } },
         realtime_endpoints: [
           {
             type: "webhook",
@@ -283,7 +304,24 @@ export class RecallMeetingProvider implements MeetingProvider {
   }
 
   async endMeeting(meetingId: string): Promise<void> {
-    const runtime = this.#runtime(meetingId);
+    // Runtimes live in memory; the meeting lives in the store. A restart
+    // therefore leaves meetings that this provider has never heard of, and
+    // refusing to end those made them permanently un-endable — stuck `live`
+    // with no way back. The store is the durable record, so it wins.
+    //
+    // The bot id went with the runtime, so its fate is genuinely unknown
+    // here. That is said out loud rather than implied: a bot still sitting in
+    // a call is a recording device nobody is watching, and the operator needs
+    // to know to check.
+    const runtime = this.#runtimes.get(meetingId);
+    if (runtime === undefined) {
+      this.#log(
+        `ending ${meetingId} with no live runtime (this server restarted). ` +
+          "If a bot was in the call, remove it from the Recall dashboard.",
+      );
+      this.#store.setMeetingStatus(meetingId, "ended");
+      return;
+    }
     if (runtime.botId !== null) {
       // A bot left running is a recording device nobody is watching, so a
       // failure to leave is logged loudly rather than swallowed.
@@ -293,12 +331,25 @@ export class RecallMeetingProvider implements MeetingProvider {
           { method: "POST" },
         );
       } catch (error) {
-        this.#log(
-          `FAILED to remove bot ${runtime.botId} from the call: ${
-            error instanceof Error ? error.message : "unknown error"
-          }`,
-        );
-        throw error;
+        // A bot that has ALREADY left is the normal case, not a failure: the
+        // vendor pulls it the moment a call empties, and it then rejects
+        // further commands with `cannot_command_unstarted_bot`. Treating that
+        // as an error left every meeting stuck `live` forever — the end was
+        // refused precisely when the bot was already gone.
+        const gone =
+          error instanceof RecallApiError &&
+          error.message.includes("cannot_command_unstarted_bot");
+        if (!gone) {
+          // Anything else means a recording device may still be in someone's
+          // call, which is worth failing loudly for.
+          this.#log(
+            `FAILED to remove bot ${runtime.botId} from the call: ${
+              error instanceof Error ? error.message : "unknown error"
+            }`,
+          );
+          throw error;
+        }
+        this.#log(`bot ${runtime.botId} had already left the call`);
       }
     }
     this.#store.setMeetingStatus(meetingId, "ended");

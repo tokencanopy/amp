@@ -132,6 +132,7 @@ describe("the tts route", () => {
               webhookSecret: "s3cret",
               speakerUrl: undefined,
               speakerVoice: undefined,
+              transcriptLanguage: undefined,
               botName: "AMP cofounder",
             },
           }

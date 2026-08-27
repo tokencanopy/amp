@@ -330,6 +330,45 @@ describe("bot lifecycle", () => {
     expect(store.requireMeeting(meeting.id).status).toBe("ended");
   });
 
+  it("can still end a meeting after the server restarted", async () => {
+    // Runtimes are in memory and meetings are in the store, so a restart
+    // leaves meetings this provider has never heard of. Refusing those made
+    // them permanently un-endable — stuck `live` with no way back, which is
+    // what happens to every live meeting every time the process restarts.
+    const { provider } = makeProvider();
+    const meeting = await liveMeeting(provider);
+
+    // A provider with the same store but no memory of that meeting is exactly
+    // what a restart produces.
+    const restarted = makeProvider().provider;
+    await expect(restarted.endMeeting(meeting.id)).resolves.toBeUndefined();
+    expect(store.requireMeeting(meeting.id).status).toBe("ended");
+  });
+
+  it("ends cleanly when the bot has already left on its own", async () => {
+    // The vendor pulls its bot the moment a call empties and then rejects
+    // further commands. Treating that as a failure left the meeting stuck
+    // `live` forever — refusing to end precisely when the bot was already
+    // gone, which is the normal way a meeting finishes.
+    const { provider } = makeProvider({
+      responder: (call) =>
+        call.url.includes("leave_call")
+          ? {
+              status: 400,
+              body: {
+                code: "cannot_command_unstarted_bot",
+                detail:
+                  "Cannot send a command to a bot which has not been started.",
+              },
+            }
+          : {},
+    });
+    const meeting = await liveMeeting(provider);
+
+    await expect(provider.endMeeting(meeting.id)).resolves.toBeUndefined();
+    expect(store.requireMeeting(meeting.id).status).toBe("ended");
+  });
+
   it("raises rather than swallowing a failure to remove the bot", async () => {
     // A bot left in a call is a recording device nobody is watching.
     const { provider } = makeProvider({
