@@ -36,7 +36,7 @@ import { MeetingGateway } from "../gateway/gateway.js";
 import type { MockMeetingProvider } from "../providers/mock.js";
 import type { RecallMeetingProvider } from "../providers/recall/provider.js";
 import type { RecallWebhookEnvelope } from "../providers/recall/wire.js";
-import { MAX_TTS_CHARS, synthesizeWav } from "../speech/tts.js";
+import { MAX_TTS_CHARS, synthesizeSpeech } from "../speech/tts.js";
 import { RealtimeHub } from "./hub.js";
 
 export class ApiError extends Error {
@@ -811,14 +811,14 @@ export function buildApp(deps: BuildAppDependencies): FastifyInstance {
         throw new ApiError(404, "unknown_meeting", "Meeting not found.");
       }
       try {
-        const wav = await synthesizeWav(request.body.text, {
+        const audio = await synthesizeSpeech(request.body.text, {
           voice: request.body.voice,
           rate: request.body.rate,
         });
         return reply
-          .header("content-type", "audio/wav")
+          .header("content-type", "audio/mp4")
           .header("cache-control", "no-store")
-          .send(wav);
+          .send(audio);
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "speech synthesis failed";

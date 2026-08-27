@@ -46,7 +46,13 @@ export interface CreateBotRequest {
   bot_name?: string;
   recording_config?: {
     transcript?: {
-      provider?: Record<string, Record<string, never>>;
+      /**
+       * A single-key object naming the provider, whose value is that
+       * provider's own options — `recallai_streaming` takes a `mode` of
+       * `prioritize_low_latency` or `prioritize_accuracy` (the default, which
+       * uses async non-real-time models).
+       */
+      provider?: Record<string, Record<string, string>>;
     };
     realtime_endpoints?: {
       type: "webhook";

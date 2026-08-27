@@ -382,6 +382,38 @@ our purposes — good for testing the transcript path, not for a participant.
    carries a shared secret (`AMP_RECALL_WEBHOOK_SECRET`) compared in constant
    time, because that transcript is the one input the agent is told to trust.
 
+### Latency: what a room will tolerate
+
+A meeting is a conversation, and a conversation has a clock. Measured against
+a live Google Meet call, the first version took **ten to fifteen seconds** to
+say its first word, and almost none of that was the model:
+
+| stage                                           | before              | now                   |
+| ----------------------------------------------- | ------------------- | --------------------- |
+| ASR finalization                                | 1–2s                | ~0.3–0.5s             |
+| attention                                       | <10ms               | <10ms                 |
+| agent's first token                             | ~3.5s               | ~3.5s                 |
+| **waiting for the turn to END before speaking** | **the whole turn**  | **removed**           |
+| synthesis                                       | 0.65s, whole answer | ~0.2s, first sentence |
+| bytes before the first word                     | 650KB–1.2MB         | ~31KB                 |
+
+Three changes, none of them making the model faster:
+
+1. **Speech is released a sentence at a time, while the agent is still
+   writing** (`src/gateway/streaming-speech.ts`). Waiting for the complete
+   response was the single largest cost, and it grew with the length of the
+   answer — the better the answer, the longer the silence.
+2. **Audio ships as 64 kbps AAC, not PCM.** Those bytes cross a tunnel before
+   anything can play, and 650KB of WAV is what made a live call stutter.
+3. **Recall is asked for `prioritize_low_latency`.** Its default,
+   `prioritize_accuracy`, uses async non-real-time transcription models by its
+   own documentation — a meeting bot left on the default is transcribing
+   offline while the room waits.
+
+What is _not_ claimed: the agent's own turn still takes seconds, and no amount
+of pipelining changes that. The goal is a room that never feels dead, not a
+model that answers instantly.
+
 ### How the agent gets a voice
 
 `public/speaker.html` is the page Recall streams into the call. It subscribes

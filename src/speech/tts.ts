@@ -91,13 +91,14 @@ function run(
 }
 
 /**
- * Synthesize `text` to a 22.05 kHz mono PCM WAV.
+ * Synthesize `text` to 64 kbps AAC in an MP4 container.
  *
- * Mono at 22.05 kHz because this is speech going into a meeting's audio mix,
- * where nothing above that is audible anyway, and the file is fetched over a
- * tunnel before it can be played — half the bytes is half the latency.
+ * Speech going into a meeting's audio mix does not need more, and every byte
+ * is fetched across a tunnel before it can be played: 64 kbps AAC is roughly
+ * a fifth of the equivalent PCM, which is the difference between speech that
+ * plays and speech that stutters.
  */
-export async function synthesizeWav(
+export async function synthesizeSpeech(
   text: string,
   options: TtsOptions = {},
 ): Promise<Buffer> {
@@ -117,7 +118,7 @@ export async function synthesizeWav(
   const timeoutMs = options.timeoutMs ?? 20_000;
   const dir = await mkdtemp(join(tmpdir(), "amp-tts-"));
   const aiff = join(dir, "speech.aiff");
-  const wav = join(dir, "speech.wav");
+  const out = join(dir, "speech.m4a");
   try {
     const sayArgs = ["-o", aiff];
     if (options.voice !== undefined && options.voice !== "") {
@@ -129,12 +130,16 @@ export async function synthesizeWav(
     // `--` so a line of speech that begins with a hyphen is text, not a flag.
     sayArgs.push("--", spoken);
     await run("say", sayArgs, timeoutMs);
+    // AAC, not PCM. Measured on one real answer: 649 KB as 22 kHz WAV against
+    // 122 KB as 64 kbps AAC — and that payload crosses a tunnel before a word
+    // can play, which is what made speech stutter in a live call. `<audio>`
+    // decodes AAC natively, so this costs nothing at the other end.
     await run(
       "afconvert",
-      ["-f", "WAVE", "-d", "LEI16@22050", "-c", "1", aiff, wav],
+      ["-f", "mp4f", "-d", "aac", "-b", "64000", aiff, out],
       timeoutMs,
     );
-    return await readFile(wav);
+    return await readFile(out);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {
       // A leftover temp directory is not worth failing a meeting over.

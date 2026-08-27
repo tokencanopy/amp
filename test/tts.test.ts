@@ -7,7 +7,8 @@
  * that a public tunnel does not expose an open audio endpoint on someone's
  * laptop — has nothing to do with which platform synthesized the bytes.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
@@ -16,40 +17,68 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createServer, type AmpServer } from "../src/server/create.js";
 import {
   MAX_TTS_CHARS,
-  synthesizeWav,
+  synthesizeSpeech,
   ttsAvailable,
 } from "../src/speech/tts.js";
 
 const onMac = platform === "darwin";
 
-/** Loudest sample in a 16-bit PCM WAV; ~0 means a silent container. */
-function peakAmplitude(wav: Buffer): number {
-  let peak = 0;
-  for (let offset = 44; offset + 1 < wav.length; offset += 2) {
-    const sample = Math.abs(wav.readInt16LE(offset));
-    if (sample > peak) peak = sample;
+/**
+ * Loudest sample in the clip; ~0 means a well-formed but SILENT container,
+ * which is the failure this file exists to catch.
+ *
+ * The audio ships as AAC, so it is decoded back to PCM to be measured — with
+ * `afconvert`, the same stock tool that encoded it, so the test needs nothing
+ * the implementation does not already require.
+ */
+function peakAmplitude(encoded: Buffer): number {
+  const dir = mkdtempSync(join(tmpdir(), "amp-tts-peak-"));
+  try {
+    const src = join(dir, "clip.m4a");
+    const pcm = join(dir, "clip.wav");
+    writeFileSync(src, encoded);
+    execFileSync("afconvert", [
+      "-f",
+      "WAVE",
+      "-d",
+      "LEI16@22050",
+      "-c",
+      "1",
+      src,
+      pcm,
+    ]);
+    const wav = readFileSync(pcm);
+    let peak = 0;
+    for (let offset = 44; offset + 1 < wav.length; offset += 2) {
+      const sample = Math.abs(wav.readInt16LE(offset));
+      if (sample > peak) peak = sample;
+    }
+    return peak;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-  return peak;
 }
 
 describe.runIf(onMac)("local speech synthesis", () => {
   it("produces a WAV a browser can play", async () => {
-    const wav = await synthesizeWav("Cap retries at three, then dead letter.");
+    const audio = await synthesizeSpeech(
+      "Cap retries at three, then dead letter.",
+    );
 
-    // RIFF/WAVE header, so the speaker page can hand it straight to an
-    // <audio> element without a codec or a container guess.
-    expect(wav.subarray(0, 4).toString("ascii")).toBe("RIFF");
-    expect(wav.subarray(8, 12).toString("ascii")).toBe("WAVE");
-    // Real samples, not an empty container — silence is the failure mode this
-    // whole file exists to rule out.
-    expect(wav.length).toBeGreaterThan(10_000);
+    // An MP4/AAC container, which <audio> decodes natively. Every MP4 carries
+    // its `ftyp` box at offset 4.
+    expect(audio.subarray(4, 8).toString("ascii")).toBe("ftyp");
+    // Compressed, and that is the point: the same speech as 22 kHz PCM was
+    // ~5x this, and those bytes cross a tunnel before a word can play.
+    expect(audio.length).toBeGreaterThan(1_000);
+    expect(audio.length).toBeLessThan(120_000);
   }, 30_000);
 
   it("treats text opening with a hyphen as words, not flags", async () => {
     // `say` would read "-v" as an option. The argument vector ends with `--`
     // before the text precisely so a model cannot smuggle one in.
-    const wav = await synthesizeWav("-v Alex is not a voice request");
-    expect(wav.subarray(0, 4).toString("ascii")).toBe("RIFF");
+    const audio = await synthesizeSpeech("-v Alex is not a voice request");
+    expect(audio.subarray(4, 8).toString("ascii")).toBe("ftyp");
   }, 30_000);
 
   it("still speaks when the voice name is wrong", async () => {
@@ -59,23 +88,27 @@ describe.runIf(onMac)("local speech synthesis", () => {
     // voice, never a mute agent — which is the right way round, and is
     // asserted here so nobody later "fixes" it into a hard failure that would
     // take a live meeting silent.
-    const wav = await synthesizeWav("hello there", { voice: "NotARealVoice" });
-    expect(wav.subarray(0, 4).toString("ascii")).toBe("RIFF");
-    expect(peakAmplitude(wav)).toBeGreaterThan(1_000);
+    const audio = await synthesizeSpeech("hello there", {
+      voice: "NotARealVoice",
+    });
+    expect(audio.subarray(4, 8).toString("ascii")).toBe("ftyp");
+    expect(peakAmplitude(audio)).toBeGreaterThan(1_000);
   }, 30_000);
 
   it("emits audible samples, not a well-formed silent container", async () => {
     // The failure this whole file exists to rule out is a bot that looks fine
     // and says nothing, so a header check alone is not enough.
-    const wav = await synthesizeWav("Cap retries at three, then dead letter.");
-    expect(peakAmplitude(wav)).toBeGreaterThan(1_000);
+    const audio = await synthesizeSpeech(
+      "Cap retries at three, then dead letter.",
+    );
+    expect(peakAmplitude(audio)).toBeGreaterThan(1_000);
   }, 30_000);
 
   it("refuses empty and oversized text", async () => {
-    await expect(synthesizeWav("   ")).rejects.toThrow(/nothing to say/u);
-    await expect(synthesizeWav("a".repeat(MAX_TTS_CHARS + 1))).rejects.toThrow(
-      /cap is/u,
-    );
+    await expect(synthesizeSpeech("   ")).rejects.toThrow(/nothing to say/u);
+    await expect(
+      synthesizeSpeech("a".repeat(MAX_TTS_CHARS + 1)),
+    ).rejects.toThrow(/cap is/u);
   });
 });
 
@@ -210,9 +243,9 @@ describe("the tts route", () => {
     }
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("audio/wav");
-    const wav = Buffer.from(await response.arrayBuffer());
-    expect(wav.subarray(0, 4).toString("ascii")).toBe("RIFF");
-    expect(wav.length).toBeGreaterThan(10_000);
+    expect(response.headers.get("content-type")).toContain("audio/mp4");
+    const audio = Buffer.from(await response.arrayBuffer());
+    expect(audio.subarray(4, 8).toString("ascii")).toBe("ftyp");
+    expect(peakAmplitude(audio)).toBeGreaterThan(1_000);
   }, 30_000);
 });

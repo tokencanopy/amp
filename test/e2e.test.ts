@@ -217,10 +217,19 @@ describe("the vertical slice", () => {
     expect(agentChat).toHaveLength(1);
     expect(agentChat[0]!.text).toContain("```ts");
 
-    // The browser was told to speak, exactly once, with the spoken text.
+    // Speech is released a sentence at a time WHILE the agent is still
+    // answering — that is where time-to-first-audio comes from, and one lump
+    // at the end would mean the room waited out the whole turn in silence.
+    // More than one `speak` is the point here, not a defect.
     const speech = feed.ofType("speak");
-    expect(speech).toHaveLength(1);
-    expect(speech[0]!["text"]).toBe(spoken.text);
+    expect(speech.length).toBeGreaterThan(1);
+
+    // ...and those sentences must reassemble into exactly the utterance that
+    // was recorded. If these two ever disagree, the room heard something
+    // other than what the transcript claims it heard.
+    expect(speech.map((event) => String(event["text"])).join(" ")).toBe(
+      spoken.text,
+    );
 
     // The response streamed rather than arriving in one lump...
     expect(feed.ofType("agent_stream").length).toBeGreaterThan(1);

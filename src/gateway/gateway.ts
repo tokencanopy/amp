@@ -40,6 +40,7 @@ import type { MeetingStore } from "../store/store.js";
 import { decideAttention, type AttentionDecision } from "./attention.js";
 import { buildRollingSummary, deriveTopic } from "./context.js";
 import { buildAgentPrompt, planSpeech } from "./prompt.js";
+import { SpeechStreamer } from "./streaming-speech.js";
 
 export interface PendingPermission {
   requestId: string;
@@ -130,6 +131,17 @@ interface MeetingRuntime {
   /** Set while a turn is in flight, so a second question queues rather than
    *  racing the first. */
   turn: Promise<void> | null;
+  /** The active turn's incremental speech planner, or null between turns. */
+  streamer: SpeechStreamer | null;
+  /** Sentences already sent as audio, joined into one utterance at turn end. */
+  spoken: string[];
+  /**
+   * Serializes sentences on their way into the call. They are released from a
+   * synchronous stream callback but sent over an async provider, so without a
+   * chain the second sentence can overtake the first and the answer arrives
+   * scrambled.
+   */
+  speech: Promise<void>;
 }
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
@@ -180,6 +192,9 @@ export class MeetingGateway {
         capabilities: null,
         acpSessionId: null,
         log: new BoundedLog(),
+        streamer: null,
+        spoken: [],
+        speech: Promise.resolve(),
         pending: new Map(),
         mcpToken: randomUUID(),
         consuming: false,
@@ -476,20 +491,32 @@ export class MeetingGateway {
       `triggered by ${trigger.speakerName}`,
     );
 
+    const streamer = new SpeechStreamer();
+    runtime.streamer = streamer;
     try {
       const result = await client.prompt(prompt);
       if (result.stopReason === "cancelled") {
+        runtime.streamer = null;
+        runtime.spoken = [];
         this.#setStatus(meetingId, "listening", "turn cancelled");
         this.#store.recordAgentEvent(meetingId, "turn_cancelled", "cancelled");
         return;
       }
 
-      const plan = planSpeech(result.text);
+      const closing = streamer.finish();
+      const plan = closing.plan;
+      runtime.streamer = null;
       this.#store.recordAgentEvent(
         meetingId,
         "turn_finished",
-        `stop=${result.stopReason} speech=${plan.decision}`,
+        `stop=${result.stopReason} speech=${plan.decision}${
+          streamer.streamed ? " streamed" : ""
+        }`,
       );
+
+      // A clause the model never punctuated, which therefore never reached a
+      // sentence boundary while streaming.
+      for (const sentence of closing.tail) this.#saySoon(meetingId, sentence);
 
       // Chat first: the details should be readable before the spoken summary
       // finishes, not after.
@@ -497,6 +524,7 @@ export class MeetingGateway {
         await this.providerFor(meetingId).sendChat(meetingId, plan.chat);
       }
       if (plan.speak !== null) {
+        // Nothing streamed — the whole-response path, unchanged.
         this.#setStatus(meetingId, "speaking", "");
         await this.providerFor(meetingId).sendSpeech(meetingId, plan.speak);
         this.#publish(meetingId, {
@@ -504,11 +532,23 @@ export class MeetingGateway {
           text: plan.speak,
           source: plan.decision,
         });
-      } else {
+      } else if (!streamer.streamed) {
         this.#logLine(
           meetingId,
           `response not spoken (${plan.decision}); posted to meeting chat instead`,
         );
+      }
+      // Wait for the queued sentences to actually reach the call before
+      // reporting the agent idle, or the tile says "listening" while it is
+      // still talking.
+      await runtime.speech;
+      if (runtime.spoken.length > 0) {
+        // One entry for one turn, matching how a human's paragraph appears in
+        // a transcript. With no speaker page configured this is also what
+        // routes the answer to meeting chat instead.
+        const said = runtime.spoken.join(" ");
+        runtime.spoken = [];
+        await this.providerFor(meetingId).sendSpeech(meetingId, said);
       }
       this.#setStatus(meetingId, "listening", "");
     } catch (error) {
@@ -697,6 +737,42 @@ export class MeetingGateway {
     return true;
   }
 
+  /**
+   * Queue one sentence for the call.
+   *
+   * Sentences are released from a synchronous stream callback but delivered
+   * over an async provider, so they are chained rather than fired in
+   * parallel: out-of-order speech is worse than slightly later speech, and a
+   * failure to say one sentence must not stop the next.
+   */
+  #saySoon(meetingId: string, sentence: string): void {
+    const runtime = this.#runtimes.get(meetingId);
+    if (runtime === undefined) return;
+    this.#setStatus(meetingId, "speaking", "");
+    runtime.spoken.push(sentence);
+    runtime.speech = runtime.speech
+      .then(() => {
+        // Audio only. `sendSpeech` also RECORDS an utterance, and calling it
+        // per sentence would shatter one answer into five transcript entries
+        // — which the rolling summary, the memory provenance and anyone
+        // reading it would all then have to reassemble. The turn records
+        // itself once, at the end.
+        this.#publish(meetingId, {
+          type: "speak",
+          text: sentence,
+          source: "speak_section",
+        });
+      })
+      .catch((error: unknown) => {
+        this.#logLine(
+          meetingId,
+          `could not speak a sentence: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+  }
+
   #onAcpEvent(meetingId: string, event: AcpClientEvent): void {
     switch (event.kind) {
       case "update":
@@ -705,6 +781,12 @@ export class MeetingGateway {
             type: "agent_stream",
             text: event.event.text,
           });
+          // Speak each sentence the moment it is complete, rather than
+          // holding the whole answer until the turn ends. This is where
+          // time-to-first-audio comes from.
+          const runtime = this.#runtimes.get(meetingId);
+          const ready = runtime?.streamer?.push(event.event.text) ?? [];
+          for (const sentence of ready) this.#saySoon(meetingId, sentence);
         } else if (event.event.type !== "unknown") {
           // Tool activity is status, not speech — the room sees that work is
           // happening without anyone reading tool output aloud.

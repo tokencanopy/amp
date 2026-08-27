@@ -231,7 +231,16 @@ export class RecallMeetingProvider implements MeetingProvider {
       meeting_url: runtime.meetingUrl,
       bot_name: this.#config.botName ?? "AMP cofounder",
       recording_config: {
-        transcript: { provider: { recallai_streaming: {} } },
+        transcript: {
+          provider: {
+            // Recall's DEFAULT is prioritize_accuracy, which its own docs
+            // describe as using async, non-real-time transcription models —
+            // so a meeting bot left on the default is transcribing offline
+            // and the room waits for it. This is a live conversation; a word
+            // that arrives late is worth more than a word that arrives right.
+            recallai_streaming: { mode: "prioritize_low_latency" },
+          },
+        },
         realtime_endpoints: [
           {
             type: "webhook",
