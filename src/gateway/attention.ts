@@ -53,6 +53,7 @@ export type AttentionReason =
   | "explicit_flag"
   | "chat_directed"
   | "wake_name"
+  | "reply_to_agent"
   | "empty"
   | "agent_speaker"
   | "no_wake_name"
@@ -74,6 +75,23 @@ export interface AttentionInput {
   addressed: boolean;
   speakerKind: ParticipantKind;
   wakeNames: readonly string[];
+  /**
+   * The agent has just asked the room something and is owed an answer.
+   *
+   * Without this, a conversation can only ever be one exchange deep. The
+   * agent asks "do you want me to check the retry path?", somebody says
+   * "yes", and nothing happens — because "yes" carries no name and no
+   * instruction, which is exactly what a person answering a question sounds
+   * like. Requiring the name again on the reply is the tell that you are
+   * talking to a machine.
+   *
+   * The caller decides when this is true, and it is deliberately narrow: only
+   * after the agent ENDED ITS TURN ON A QUESTION, only for a short window,
+   * and only until somebody speaks. A question hands the turn back
+   * explicitly; a statement does not, and treating one as if it did would let
+   * the agent barge into the conversation that carries on around it.
+   */
+  awaitingReply?: boolean;
 }
 
 /** Interjections that may precede a vocative without breaking it. */
@@ -660,6 +678,23 @@ const silent = (
   detail,
 });
 
+/**
+ * Did this turn end by handing the conversation back?
+ *
+ * A question mark at the very end is the signal, and the position is the
+ * point: an agent that mentions a question mid-answer and then carries on
+ * ("should we retry? we already do, three times") has not stopped talking,
+ * while one that finishes on a question is waiting. Trailing quotes and
+ * brackets are stripped because a question can close inside them.
+ *
+ * Cheap and shallow on purpose. The cost of being wrong is one repetition of
+ * the agent's name, which is what the room already does today.
+ */
+export function endsWithQuestion(text: string): boolean {
+  const trimmed = text.trim().replace(/["'’”)\]]+$/u, "");
+  return trimmed.endsWith("?");
+}
+
 export function decideAttention(input: AttentionInput): AttentionDecision {
   const text = input.text.trim();
   if (text === "") return silent("empty", "nothing was said");
@@ -675,6 +710,18 @@ export function decideAttention(input: AttentionInput): AttentionDecision {
       triggered: true,
       reason: "explicit_flag",
       detail: "the speaker marked this as addressed to the agent",
+    };
+  }
+
+  // The agent asked; this is somebody answering. A reply does not repeat the
+  // name — "yes" is a complete answer to a question, and demanding "Cofounder,
+  // yes" is the difference between a conversation and a command line. Checked
+  // before the wake-name rules because a reply satisfies none of them.
+  if (input.awaitingReply === true) {
+    return {
+      triggered: true,
+      reason: "reply_to_agent",
+      detail: "answering the question the agent just asked",
     };
   }
 
@@ -703,6 +750,7 @@ export function decideAttention(input: AttentionInput): AttentionDecision {
     explicit_flag: "",
     chat_directed: "",
     wake_name: "",
+    reply_to_agent: "",
     empty: "",
     agent_speaker: "",
     no_wake_name: "no wake name was used",

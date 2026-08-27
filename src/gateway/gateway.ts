@@ -37,7 +37,11 @@ import type {
 } from "../domain.js";
 
 import type { MeetingStore } from "../store/store.js";
-import { decideAttention, type AttentionDecision } from "./attention.js";
+import {
+  decideAttention,
+  endsWithQuestion,
+  type AttentionDecision,
+} from "./attention.js";
 import { buildRollingSummary, deriveTopic } from "./context.js";
 import { buildAgentPrompt, planSpeech } from "./prompt.js";
 import { SpeechStreamer } from "./streaming-speech.js";
@@ -158,9 +162,27 @@ interface MeetingRuntime {
    * scrambled.
    */
   speech: Promise<void>;
+  /**
+   * When the agent last ended a turn by asking the room something.
+   *
+   * Null unless it is actually owed an answer. Held in memory rather than
+   * stored because it describes the last few seconds of a conversation, and a
+   * process that restarts has lost the thread anyway.
+   */
+  awaitingReplySince: number | null;
 }
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
+
+/**
+ * How long the agent keeps listening for an answer after asking a question.
+ *
+ * Long enough for somebody to think before replying; short enough that the
+ * room's next unrelated remark is not mistaken for an answer. When it lapses
+ * the agent needs its name again, which is the correct failure: a missed
+ * follow-up costs one repetition, a false one costs an interruption.
+ */
+const REPLY_WINDOW_MS = 30_000;
 
 export class MeetingGateway {
   readonly #store: MeetingStore;
@@ -211,6 +233,7 @@ export class MeetingGateway {
         streamer: null,
         spoken: [],
         speech: Promise.resolve(),
+        awaitingReplySince: null,
         pending: new Map(),
         mcpToken: randomUUID(),
         consuming: false,
@@ -430,12 +453,26 @@ export class MeetingGateway {
     },
   ): Promise<void> {
     const meeting = this.#store.requireMeeting(meetingId);
+    // Consumed whether or not it triggers: the agent asked, somebody spoke,
+    // and the question has had its answer. Leaving it open would make every
+    // later remark in the window count as a reply, which is how an agent ends
+    // up joining a conversation it was never part of.
+    const listening = this.#runtimes.get(meetingId);
+    const askedAt = listening?.awaitingReplySince ?? null;
+    const fromHuman = input.speakerKind !== "agent";
+    const awaitingReply =
+      askedAt !== null && fromHuman && Date.now() - askedAt < REPLY_WINDOW_MS;
+    if (listening !== undefined && askedAt !== null && fromHuman) {
+      listening.awaitingReplySince = null;
+    }
+
     const decision: AttentionDecision = decideAttention({
       text: input.text,
       channel: input.channel,
       addressed: input.addressed,
       speakerKind: input.speakerKind,
       wakeNames: [meeting.agentDisplayName, ...meeting.wakeNames],
+      awaitingReply,
     });
 
     this.#publish(meetingId, {
@@ -558,14 +595,24 @@ export class MeetingGateway {
       // reporting the agent idle, or the tile says "listening" while it is
       // still talking.
       await runtime.speech;
+      const saidAloud =
+        runtime.spoken.length > 0
+          ? runtime.spoken.join(" ")
+          : (plan.speak ?? "");
       if (runtime.spoken.length > 0) {
         // One entry for one turn, matching how a human's paragraph appears in
         // a transcript. With no speaker page configured this is also what
         // routes the answer to meeting chat instead.
-        const said = runtime.spoken.join(" ");
         runtime.spoken = [];
-        await this.providerFor(meetingId).sendSpeech(meetingId, said);
+        await this.providerFor(meetingId).sendSpeech(meetingId, saidAloud);
       }
+
+      // If it just asked the room something, the next thing anyone says is
+      // almost certainly the answer — and an answer does not repeat the name.
+      runtime.awaitingReplySince = endsWithQuestion(saidAloud)
+        ? Date.now()
+        : null;
+
       this.#setStatus(meetingId, "listening", "");
     } catch (error) {
       const message =

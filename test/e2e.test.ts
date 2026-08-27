@@ -341,6 +341,73 @@ describe("the vertical slice", () => {
     expect(answer.text).toContain("need approval");
   });
 
+  it("takes an answer to its own question without being named again", async () => {
+    // The whole point of the follow-up window, end to end. Saying the agent's
+    // name to answer its question is the tell that you are talking to a
+    // machine, and it is what made every exchange exactly one turn deep.
+    const { meetingId, grace } = await startMeeting();
+    await connectFakeAgent(meetingId);
+
+    await say(meetingId, grace, "Cofounder, what are the options here?");
+    const asked = await waitFor("the agent's question", async () => {
+      const view = await call<MeetingView>(`/api/meetings/${meetingId}`);
+      return (
+        view.transcript.find((entry) => entry.speakerKind === "agent") ?? null
+      );
+    });
+    expect(asked.text.trim().endsWith("?")).toBe(true);
+
+    // No name, no instruction — just an answer, the way a person replies.
+    await say(meetingId, grace, "yes");
+
+    const followUp = await waitFor("the follow-up answer", async () => {
+      const view = await call<MeetingView>(`/api/meetings/${meetingId}`);
+      const agentTurns = view.transcript.filter(
+        (entry) => entry.speakerKind === "agent",
+      );
+      return agentTurns.length > 1 ? agentTurns[1]! : null;
+    });
+    expect(followUp.text.length).toBeGreaterThan(0);
+  });
+
+  it("does not answer the room once the question has been answered", async () => {
+    // The window closes on the first thing said. Without that, every remark
+    // for the next half minute counts as a reply and the agent joins a
+    // conversation it was never part of.
+    const { meetingId, grace } = await startMeeting();
+    await connectFakeAgent(meetingId);
+
+    await say(meetingId, grace, "Cofounder, what are the options here?");
+    await waitFor("the agent's question", async () => {
+      const view = await call<MeetingView>(`/api/meetings/${meetingId}`);
+      return (
+        view.transcript.find((entry) => entry.speakerKind === "agent") ?? null
+      );
+    });
+
+    await say(meetingId, grace, "yes");
+    await waitFor("the follow-up answer", async () => {
+      const view = await call<MeetingView>(`/api/meetings/${meetingId}`);
+      const turns = view.transcript.filter(
+        (entry) => entry.speakerKind === "agent",
+      );
+      return turns.length > 1 ? turns[1]! : null;
+    });
+
+    // Somebody carries on talking to the room. The agent is not in this.
+    const before = await call<MeetingView>(`/api/meetings/${meetingId}`);
+    const priorTurns = before.transcript.filter(
+      (entry) => entry.speakerKind === "agent",
+    ).length;
+    await say(meetingId, grace, "anyway, lunch is at one");
+    await sleep(1_500);
+
+    const after = await call<MeetingView>(`/api/meetings/${meetingId}`);
+    expect(
+      after.transcript.filter((entry) => entry.speakerKind === "agent").length,
+    ).toBe(priorTurns);
+  });
+
   it("cancels agent work without ending the meeting", async () => {
     const { meetingId, ada } = await startMeeting();
     await connectFakeAgent(meetingId);

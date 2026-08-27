@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { decideAttention, splitSentences } from "../src/gateway/attention.js";
+import {
+  decideAttention,
+  endsWithQuestion,
+  splitSentences,
+} from "../src/gateway/attention.js";
 
 const WAKE = ["cofounder", "codex", "claude"];
 
@@ -138,5 +142,82 @@ describe("splitSentences", () => {
       "Then another?",
       "Yes!",
     ]);
+  });
+});
+
+describe("answering a question the agent asked", () => {
+  const base = {
+    channel: "speech" as const,
+    addressed: false,
+    speakerKind: "human" as const,
+    wakeNames: ["cofounder"],
+  };
+
+  it("treats a bare yes as an answer", () => {
+    // The case that made a real conversation impossible: the agent asks
+    // "want me to check the retry path?", somebody says "yes", and nothing
+    // happens, because "yes" has no name and no instruction in it.
+    const decision = decideAttention({
+      ...base,
+      text: "yes",
+      awaitingReply: true,
+    });
+    expect(decision.triggered).toBe(true);
+    expect(decision.reason).toBe("reply_to_agent");
+  });
+
+  it("accepts an answer that is a whole sentence", () => {
+    const decision = decideAttention({
+      ...base,
+      text: "Go ahead, but only the inbound path.",
+      awaitingReply: true,
+    });
+    expect(decision.triggered).toBe(true);
+  });
+
+  it("still needs the name when nothing was asked", () => {
+    // The window is not open, so this is just people talking.
+    const decision = decideAttention({ ...base, text: "yes" });
+    expect(decision.triggered).toBe(false);
+  });
+
+  it("never answers itself, even inside the window", () => {
+    const decision = decideAttention({
+      ...base,
+      text: "yes",
+      speakerKind: "agent",
+      awaitingReply: true,
+    });
+    expect(decision.triggered).toBe(false);
+    expect(decision.reason).toBe("agent_speaker");
+  });
+
+  it("stays quiet on an empty utterance in the window", () => {
+    const decision = decideAttention({
+      ...base,
+      text: "   ",
+      awaitingReply: true,
+    });
+    expect(decision.triggered).toBe(false);
+    expect(decision.reason).toBe("empty");
+  });
+});
+
+describe("noticing that the agent handed the turn back", () => {
+  it("sees a turn that ends on a question", () => {
+    expect(endsWithQuestion("Want me to check the retry path?")).toBe(true);
+    expect(endsWithQuestion("Should I look at the inbound webhook?  ")).toBe(
+      true,
+    );
+    expect(endsWithQuestion('Is that what you meant?"')).toBe(true);
+  });
+
+  it("does not mistake a question mid-answer for one", () => {
+    // It asked and answered itself; it is still talking, not waiting.
+    expect(
+      endsWithQuestion("Should we retry? We already do, three times."),
+    ).toBe(false);
+    expect(endsWithQuestion("Retries cap at three.")).toBe(false);
+    expect(endsWithQuestion("")).toBe(false);
   });
 });

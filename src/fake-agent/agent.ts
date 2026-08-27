@@ -67,6 +67,9 @@ const ACTION_WORDS = [
  */
 const WRITE_WORDS = ["fix", "deploy", "change", "edit", "update", "write"];
 
+/** Asking for a recommendation, which this agent answers with a question. */
+const ASK_WORDS = ["options", "advice", "recommend"];
+
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, ms);
@@ -293,9 +296,13 @@ export class FakeAcpAgent {
       return;
     }
 
-    const response = needsWork
-      ? workResponse(question)
-      : opinionResponse(question);
+    const response = ASK_WORDS.some((word) =>
+      question.toLowerCase().includes(word),
+    )
+      ? askResponse(question)
+      : needsWork
+        ? workResponse(question)
+        : opinionResponse(question);
     const finished = await this.#stream(sessionId, response);
     this.#reply(message.id, {
       stopReason: finished ? "end_turn" : "cancelled",
@@ -388,6 +395,21 @@ export function extractQuestion(prompt: string): string {
   const firstLine = tail.split("\n")[0] ?? "";
   const colon = firstLine.indexOf(":");
   return colon === -1 ? firstLine.trim() : firstLine.slice(colon + 1).trim();
+}
+
+/**
+ * A turn that ends by handing the conversation back.
+ *
+ * The other two responses finish on a statement, so neither can exercise what
+ * happens after the agent asks something — which is where a real reply
+ * arrives with no name attached to it, because people answering a question
+ * say "yes", not "Cofounder, yes".
+ */
+function askResponse(question: string): string {
+  return [
+    "SPEAK:",
+    `On "${trim(question)}" — there are two paths, and they differ in blast radius. Want me to look at the inbound one first?`,
+  ].join("\n");
 }
 
 function opinionResponse(question: string): string {
