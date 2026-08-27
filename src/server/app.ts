@@ -871,6 +871,11 @@ export function buildApp(deps: BuildAppDependencies): FastifyInstance {
             meeting: {
               title: meeting.title,
               agentDisplayName: meeting.agentDisplayName,
+              // The speaker page shows a room how to address the agent, and
+              // it must show the names THIS meeting actually answers to —
+              // a hint that names something the engine will ignore is worse
+              // than no hint.
+              wakeNames: meeting.wakeNames,
             },
             agent: gateway.snapshot(meetingId),
           }),

@@ -115,12 +115,71 @@
       .said {
         font-size: clamp(18px, 3.4vmin, 42px);
         line-height: 1.35;
-        min-height: 3.6em;
         color: var(--ink);
       }
-      .said:empty::before {
-        content: "Listening.";
+      /* Reserve nothing while idle — the tile is small and every line of
+         dead space pushes the instructions further from a reader's eye. */
+      .said:empty {
+        display: none;
+      }
+      /* The progress bar means nothing when there is nothing playing. */
+      .bar {
+        transition: opacity 0.2s ease;
+      }
+      .tile:not([data-speaking="true"]) .bar {
+        opacity: 0;
+      }
+      /* The tile is video-compressed and often small in a grid, so this is
+         sized to survive both: large type, high contrast, few words. */
+      .howto {
+        display: flex;
+        flex-direction: column;
+        gap: 1.6vmin;
+      }
+      .howto[hidden] {
+        display: none;
+      }
+      .howto-lead {
+        font-size: clamp(13px, 2.1vmin, 22px);
         color: var(--muted);
+        letter-spacing: 0.01em;
+      }
+      .howto-say {
+        font-size: clamp(20px, 4.4vmin, 54px);
+        font-weight: 600;
+        line-height: 1.15;
+        letter-spacing: -0.015em;
+      }
+      #wake {
+        color: var(--live);
+      }
+      .howto-rest {
+        color: var(--muted);
+        font-weight: 400;
+      }
+      .howto-rules {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.7vmin;
+      }
+      .howto-rules li {
+        font-size: clamp(12px, 1.9vmin, 20px);
+        color: var(--muted);
+        padding-left: 1.5em;
+        position: relative;
+      }
+      .howto-rules li::before {
+        content: "\2022";
+        position: absolute;
+        left: 0.35em;
+        color: var(--accent);
+      }
+      .howto-rules strong {
+        color: var(--ink);
+        font-weight: 600;
       }
       .status {
         font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
@@ -154,13 +213,38 @@
     </style>
   </head>
   <body>
-    <div class="tile">
+    <div class="tile" id="tile">
       <div class="who">
         <span class="dot" id="dot" data-state="idle"></span>
         <div>
           <div class="name" id="agent-name">Agent</div>
           <div class="role" id="meeting-title">connecting…</div>
         </div>
+      </div>
+      <!--
+        What the room sees when the agent is not talking.
+
+        Recall's Output Media always carries video, so this tile is in the
+        call whether or not anything is being said. Left blank it is a dead
+        rectangle; used properly it is the only place a participant can learn
+        how to address the agent — nobody reads documentation before a
+        meeting, and the wake name is not guessable.
+
+        The two rules below are the ones people actually get wrong, observed
+        on live calls: they name the agent and then pause (which the
+        transcriber renders as a full stop, splitting the address from the
+        question), and they name it without asking for anything.
+      -->
+      <div class="howto" id="howto">
+        <div class="howto-lead">To ask me something, say</div>
+        <div class="howto-say">
+          <span id="wake">Cofounder</span
+          ><span class="howto-rest">, what do you think?</span>
+        </div>
+        <ul class="howto-rules">
+          <li>Say my name and your question <strong>in one breath</strong></li>
+          <li>Name me without asking anything and I'll stay quiet</li>
+        </ul>
       </div>
       <div class="said" id="said" aria-live="polite"></div>
       <div class="bar"><i id="bar"></i></div>
@@ -195,7 +279,13 @@
         el("status").textContent = text;
         console.log("[speaker]", text);
       };
-      const setState = (state) => el("dot").setAttribute("data-state", state);
+      const setState = (state) => {
+        el("dot").setAttribute("data-state", state);
+        el("tile").setAttribute(
+          "data-speaking",
+          state === "speaking" ? "true" : "false",
+        );
+      };
 
       if (meetingId === "") {
         setStatus("no meetingId in the URL; nothing to join");
@@ -401,11 +491,20 @@
             const lead = Math.max(0, (startAt - ctx.currentTime) * 1000);
             setTimeout(() => {
               el("said").textContent = text;
+              // The instructions are for a room waiting on the agent. While
+              // it is talking, what it is saying matters more.
+              el("howto").hidden = true;
               setState("speaking");
             }, lead);
             setTimeout(
               () => {
-                if (queue.length === 0) setState("idle");
+                if (queue.length === 0) {
+                  setState("idle");
+                  // Back to the hint, so a participant joining late still
+                  // learns how to talk to it.
+                  el("said").textContent = "";
+                  el("howto").hidden = false;
+                }
               },
               Math.max(0, (endAt - ctx.currentTime) * 1000),
             );
@@ -467,6 +566,13 @@
             }
             if (typeof meeting.agentDisplayName === "string") {
               el("agent-name").textContent = meeting.agentDisplayName;
+            }
+            // Show the name this meeting ACTUALLY answers to. A hint naming
+            // something the attention engine ignores is worse than none.
+            if (Array.isArray(meeting.wakeNames) && meeting.wakeNames.length) {
+              const first = String(meeting.wakeNames[0]);
+              el("wake").textContent =
+                first.charAt(0).toUpperCase() + first.slice(1);
             }
             return;
           }
