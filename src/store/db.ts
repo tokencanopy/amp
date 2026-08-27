@@ -132,9 +132,9 @@ export function openDatabase(path: string): DatabaseSync {
   // Databases created before provider_bot_id existed. SQLite has no
   // ADD COLUMN IF NOT EXISTS, and re-adding throws, so the existing columns
   // are read first.
-  const columns = db
-    .prepare("PRAGMA table_info(meetings)")
-    .all() as { name: string }[];
+  const columns = db.prepare("PRAGMA table_info(meetings)").all() as {
+    name: string;
+  }[];
   if (!columns.some((column) => column.name === "provider_bot_id")) {
     db.exec("ALTER TABLE meetings ADD COLUMN provider_bot_id TEXT;");
   }

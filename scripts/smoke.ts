@@ -165,20 +165,23 @@ try {
   );
 
   step(
-    'work request with a permission gate: "Codex, inspect the webhook retries."',
+    'write request with a permission gate: "Codex, fix the webhook retries."',
   );
+  // "fix", not "inspect". A read is answered without a human now — a meeting
+  // has no approval UI, so asking one waits for nobody — and only a change
+  // still stops for a person.
   await call(`/api/meetings/${meetingId}/utterances`, {
     method: "POST",
     body: {
       participantId: grace.id,
-      text: "Codex, inspect the webhook retries.",
+      text: "Codex, fix the webhook retries.",
     },
   });
   const pending = await waitFor("a permission request", async () => {
     const now = await call<MeetingView>(`/api/meetings/${meetingId}`);
     return now.agent.pendingPermissions[0] ?? null;
   });
-  detail(`agent asked for: ${pending.toolName} (nothing auto-approved)`);
+  detail(`agent asked for: ${pending.toolName} (a write waits for a human)`);
   await call(
     `/api/meetings/${meetingId}/permissions/${pending.requestId}/respond`,
     { method: "POST", body: { decision: "allow", optionId: "allow_once" } },
