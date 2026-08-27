@@ -6,7 +6,7 @@ through.**
 Give any ACP-speaking coding agent a seat in a live meeting: it hears
 speaker-attributed transcript, knows when it is being addressed, answers out
 loud, posts detail to the meeting chat, works while the conversation continues,
-and asks a human before it acts.
+and asks a human before it changes anything.
 
 > "Protocol" here names the channel, not a wire format: AMP composes two
 > existing open protocols rather than defining one (see _What AMP is,
@@ -78,12 +78,15 @@ ships in this app and speaks real ACP.
 
 Try, in this order:
 
-| Say                                   | What happens                             |
-| ------------------------------------- | ---------------------------------------- |
-| `I used Codex yesterday.`             | ignored — mentioned, not addressed       |
-| `We should ask the cofounder later.`  | ignored — a proposal about it, not to it |
-| `Cofounder, what do you think?`       | **answers**, streams, and speaks aloud   |
-| `Codex, inspect the webhook retries.` | asks permission first; you allow or deny |
+| Say                                   | What happens                                      |
+| ------------------------------------- | ------------------------------------------------- |
+| `I used Codex yesterday.`             | ignored — mentioned, not addressed                |
+| `We should ask the cofounder later.`  | ignored — a proposal about it, not to it          |
+| `Cofounder, what do you think?`       | **answers**, streams, and speaks aloud            |
+| `Codex, inspect the webhook retries.` | reads a file without asking, then answers         |
+| `Codex, fix the webhook retries.`     | asks permission first — a write waits for a human |
+| `Cofounder, what are the options?`    | answers **with a question of its own**            |
+| `yes`                                 | answers again — a reply needs no name             |
 
 To see the same run without a browser:
 
@@ -147,84 +150,98 @@ public/                  the meeting simulator UI (no build step)
 A meeting is a continuous stream of speech and almost none of it is for the
 agent. Forwarding every fragment would burn a model turn per sentence, and an
 agent that answers side conversation is one nobody invites back. So the default
-is silence and the bar for breaking it is deterministic — **no model decides
+is silence, and the bar for breaking it is deterministic — **no model decides
 whether a model gets to speak**.
 
-Three things earn a turn:
+Four things earn a turn:
 
-1. a human explicitly marks an utterance as addressed (the checkbox in the UI);
+1. a human marks an utterance as addressed (the checkbox in the UI);
 2. a chat message directed at it (`@cofounder …`);
-3. a wake name used **vocatively** _and_ followed by a question or instruction.
+3. a wake name used **vocatively** _and_ followed by a question or instruction;
+4. **anything at all, for 30 seconds after the agent ends a turn on a
+   question** — because somebody answering says "yes", not "Cofounder, yes".
 
 Rule 3 does the work, because a wake name is also an ordinary noun in a meeting
 about coding agents. The grammar it exploits is that English marks direct
-address positionally: a vocative sits at the edge of its clause, set off by
-punctuation, and is not preceded by a determiner or a verb.
+address positionally: a vocative sits at the edge of its clause and is not
+preceded by a determiner or a verb.
 
-| Triggers                                  | Stays silent                                                       |
-| ----------------------------------------- | ------------------------------------------------------------------ |
-| `Cofounder, what do you think?`           | `I used Codex yesterday.`                                          |
-| `Hey Codex, inspect the webhook retries.` | `Claude helped write this.`                                        |
-| `Claude: summarize our decision.`         | `We should ask the cofounder later.`                               |
-| `So what do you think, cofounder?`        | `Our cofounder is out this week.`                                  |
-| `Codex can you check the retries?`        | `Codex and Claude are both ACP agents.`                            |
-|                                           | `Cofounder, nice to have you here.` (addressed, but nothing asked) |
+| Triggers                                     | Stays silent                                                   |
+| -------------------------------------------- | -------------------------------------------------------------- |
+| `Cofounder, what do you think?`              | `I used Codex yesterday.`                                      |
+| `Hey Codex, inspect the webhook retries.`    | `Claude helped write this.`                                    |
+| `Claude: summarize our decision.`            | `We should ask the cofounder later.`                           |
+| `So what do you think, cofounder?`           | `Our cofounder is out this week.`                              |
+| `Codex can you check the retries?`           | `Codex and Claude are both ACP agents.`                        |
+| `yes` — _right after it asked you something_ | `Cofounder, nice to have you here.` (addressed, nothing asked) |
 
-`test/attention.test.ts` holds 31 cases, weighted toward false positives.
+Rule 4 is deliberately narrow, because the costs are asymmetric: a missed
+follow-up costs one repetition, a false one costs an interruption. It opens
+only after a turn that _ends_ on a question — a question hands the turn back, a
+statement does not — and it is consumed by the first thing anyone says, so the
+agent cannot drift into the conversation carrying on around it.
 
 ### It has to work on speech, not writing
 
 A caption stream does not punctuate. `cofounder what do you think` arrives with
 no comma, no question mark and no capitals, and the first version of these
-rules — which required the comma — lost **six of eight** genuine addresses when
-measured against that input. It did not get them wrong; it went deaf, which in
-a meeting is just as useless.
+rules — which required the comma — lost **six of eight** genuine addresses
+against that input. It did not answer them wrongly; it went deaf, which in a
+meeting is just as useless.
 
-So punctuation is evidence, never a precondition. When the comma is there it
-settles the vocative outright; when it is missing the same decision is made
-from syntax:
+So punctuation is evidence, never a precondition. When the comma is missing the
+same decision is made from syntax:
 
 - **the predicate guard** — what follows a vocative is an imperative or a
   question, never a predicate. `claude helped write this` has the name as the
-  _subject_ of a finite verb, so it stays silent, while `claude write the
-migration note` is an instruction and does not;
-- **the addressee is already named** — a leading vocative means the clause
-  after it need not say "you" again, so `codex what's the retry budget` and
-  `cofounder your thoughts` are heard;
-- **fillers are stripped** before the directive test, because speech opens with
-  them constantly (`um so cofounder …`).
+  _subject_ of a finite verb and stays silent; `claude write the migration
+note` is an instruction and does not;
+- **the addressee is already named** — a leading vocative means the clause need
+  not say "you" again, so `codex what's the retry budget` is heard;
+- **fillers are stripped** first, because speech opens with them constantly
+  (`um so cofounder …`).
 
-One deliberate limit: with no comma, a _trailing_ vocative is only recognized
+Transcribers also break a name apart and punctuate a pause as a full stop, so
+`Co founder`, `co-founder` and `Cofounder.` are all matched as the one name —
+each of those was observed on a live call, and each had made the agent silently
+deaf.
+
+One deliberate limit: with no comma, a _trailing_ vocative is recognized only
 after an opinion verb (`what do you think cofounder`). A name at the end of a
-clause is usually its object — `did you try codex`, `remind me to ping codex`,
-`when did you last use codex` are all addressed to a person about the agent,
-and admitting them cost three false positives when measured. Any other trailing
-address needs the comma, a leading vocative, or the "address the agent"
-checkbox.
+clause is usually its object — `did you try codex`, `remind me to ping codex` —
+and admitting those cost three false positives when measured.
 
-`test/asr.test.ts` asserts every rule twice, once written and once as ASR would
-emit it, deriving the spoken form mechanically so the two cannot drift.
+`test/attention.test.ts` holds 38 cases, weighted toward false positives.
+`test/asr.test.ts` re-asserts the rules as ASR would emit them, deriving the
+spoken form mechanically so the two cannot drift.
 
 ## Speech
 
-Browser `speechSynthesis` in v0, behind a `SpeechOutput` interface so a
-server-side TTS provider can replace it without the gateway noticing.
+Synthesized server-side behind a `synthesizeSpeech` seam: a neural voice
+(ElevenLabs) when a key is present, macOS `say` when it is not. The fallback
+matters more than it looks — the repo has to run from a clone with no
+credentials, so a missing key is a downgrade, never an error.
 
-The agent is asked to split its answer with `SPEAK:` and `CHAT:`. `planSpeech`
-enforces the split whether or not it complied:
+**Sentences are released as the agent writes them**, not when the turn ends.
+The room hears the first sentence while the third is still being generated,
+which is the difference between roughly two seconds to first audio and roughly
+ten. A sentence is held back until it is actually finished, because half a
+clause sounds worse than a pause.
 
-- a `SPEAK:` section is spoken (sanitized: no code, URLs become "a link in the
-  chat", capped and truncated at a sentence boundary);
+The agent is asked to split its answer with `SPEAK:` and `CHAT:`, and
+`planSpeech` enforces the split whether or not it complied:
+
+- a `SPEAK:` section is spoken — sanitized, with code removed and URLs turned
+  into "a link in the chat", capped and truncated at a sentence boundary;
 - a short plain response is spoken as-is;
-- anything containing code, resembling tool output, or over ~60 words is **not
-  spoken** — it is posted to meeting chat instead;
+- anything containing code, resembling tool output, or over ~110 words is
+  **not spoken** — it goes to meeting chat instead;
 - tool activity is a status update, never speech.
 
 **Stopping speech and cancelling work are separate controls, deliberately.**
-"Stop talking" is a local browser action that never reaches the agent; "stop
-working" is an ACP `session/cancel` that never touches the voice. A new direct
-question while the agent is speaking is a barge-in: the voice stops, the work
-does not.
+"Stop talking" is a local action that never reaches the agent; "stop working"
+is an ACP `session/cancel` that never touches the voice. A new direct question
+while the agent is speaking is a barge-in: the voice stops, the work does not.
 
 ## Agents
 
@@ -335,164 +352,22 @@ GET    /ws?meetingId=…            realtime meeting feed
         /api/mcp/*                loopback bridge for the meeting MCP server
 ```
 
-## Meeting providers
+Two are wired in, behind one six-method `MeetingProvider` interface — nothing
+above it knows which platform is in use.
 
-Two are wired in. The simulator is the default and always available; Recall.ai
-is offered only when fully configured.
+|            | `mock` (simulator)     | `recall`                          |
+| ---------- | ---------------------- | --------------------------------- |
+| needs      | nothing                | a Recall.ai API key, a public URL |
+| meetings   | scripted, in-process   | real Google Meet · Zoom · Teams   |
+| use it for | development, tests, CI | actually being in a call          |
 
-|              | `mock` (simulator)        | `recall`                                     |
-| ------------ | ------------------------- | -------------------------------------------- |
-| Meetings     | simulated, in this UI     | real Zoom / Meet / Teams calls               |
-| Transcript   | typed                     | live, speaker-attributed, streaming          |
-| Agent chat   | in-app                    | posted into the meeting's own chat           |
-| Agent speech | browser `speechSynthesis` | a page whose audio is streamed into the call |
-| Needs        | nothing                   | API key, public webhook URL, shared secret   |
+The simulator is the default and always available, so the whole system runs
+from a clone with no credentials. Recall is offered only when fully configured.
 
-Create a meeting against one by naming it:
-
-```jsonc
-POST /api/meetings
-{ "title": "Retry sync", "provider": "recall",
-  "meetingUrl": "https://meet.google.com/abc-defg-hij" }
-```
-
-### Why Recall rather than Meet's own API
-
-Google's [Meet Media API](https://developers.google.com/workspace/meet/media-api/guides/overview)
-gives real-time audio, and cannot carry this product: it is **receive-only**
-(no sending media or messages, so the agent could never speak or post), and
-its Developer Preview requires **every participant in the conference** to be
-enrolled — so it cannot be used in a meeting with a guest. It is useful for
-listening-only experiments and nothing more.
-
-A bot vendor is therefore the only path, and of those, Recall is currently the
-only one that closes the loop: transcript in, **and** chat and speech out.
-Vexa (Apache-2.0, self-hostable, cheaper) and Meeting BaaS are listen-only for
-our purposes — good for testing the transcript path, not for a participant.
-
-### Three constraints worth knowing before you wire it up
-
-1. **Output Media always carries video.** There is no audio-only mode and the
-   camera cannot be off, so the agent is a visible tile in the call.
-2. **The speaker page is the speech engine.** Recall streams a webpage's audio
-   into the call; that page must make the sound itself. `public/speaker.html`
-   is that page. Without it configured, the agent posts to chat instead of
-   talking — mute, but never silently so.
-3. **The webhook is public and unauthenticated by the vendor.** Its URL
-   carries a shared secret (`AMP_RECALL_WEBHOOK_SECRET`) compared in constant
-   time, because that transcript is the one input the agent is told to trust.
-
-### Latency: what a room will tolerate
-
-A meeting is a conversation, and a conversation has a clock. Measured against
-a live Google Meet call, the first version took **ten to fifteen seconds** to
-say its first word, and almost none of that was the model:
-
-| stage                                           | before              | now                   |
-| ----------------------------------------------- | ------------------- | --------------------- |
-| ASR finalization                                | 1–2s                | ~0.3–0.5s             |
-| attention                                       | <10ms               | <10ms                 |
-| agent's first token                             | ~3.5s               | ~3.5s                 |
-| **waiting for the turn to END before speaking** | **the whole turn**  | **removed**           |
-| synthesis                                       | 0.65s, whole answer | ~0.2s, first sentence |
-| bytes before the first word                     | 650KB–1.2MB         | ~31KB                 |
-
-Three changes, none of them making the model faster:
-
-1. **Speech is released a sentence at a time, while the agent is still
-   writing** (`src/gateway/streaming-speech.ts`). Waiting for the complete
-   response was the single largest cost, and it grew with the length of the
-   answer — the better the answer, the longer the silence.
-2. **Audio ships as 64 kbps AAC, not PCM.** Those bytes cross a tunnel before
-   anything can play, and 650KB of WAV is what made a live call stutter.
-3. **Recall is asked for `prioritize_low_latency`.** Its default,
-   `prioritize_accuracy`, uses async non-real-time transcription models by its
-   own documentation — a meeting bot left on the default is transcribing
-   offline while the room waits.
-
-What is _not_ claimed: the agent's own turn still takes seconds, and no amount
-of pipelining changes that. The goal is a room that never feels dead, not a
-model that answers instantly.
-
-### How the agent gets a voice
-
-`public/speaker.html` is the page Recall streams into the call. It subscribes
-to the meeting's realtime feed, and when the gateway decides something should
-be said aloud it plays that text — one utterance at a time, in order, because
-a meeting can wait for a late answer but cannot un-hear two voices at once.
-
-**The audio is synthesized on the machine running AMP, not in the browser.**
-That is not a preference; it is forced. The browser that loads this page is
-headless Chrome inside Recall's infrastructure, where `speechSynthesis` reports
-zero voices and speaks silence. So the page fetches WAV bytes from
-`POST /api/meetings/:id/tts`, which shells out to macOS `say` and `afconvert`
-(see `src/speech/tts.ts`). Both ship with the OS, so speech adds no dependency,
-no credential, no cost and no third party — the same trade `node:sqlite` makes,
-for the same reason: this has to run from a clone.
-
-The cost is that **speech is macOS-only**. Elsewhere the route answers 503
-`tts_unavailable` and the page falls back to `speechSynthesis`, which on a
-developer's own machine has voices and works.
-
-That TTS route is reachable through the same public tunnel as the webhook, so
-it carries the same shared secret and 404s without it. Unauthenticated it would
-be an open text-to-audio endpoint on your laptop, and a way to make your machine
-run `say` on demand.
-
-**The one thing this cannot verify from here is autoplay.** A browser may refuse
-to start audio without a user gesture, and Recall's is configured not to —
-streaming page audio is the entire product — but if that is ever wrong the agent
-is mute in a live call. So the page says so in the tile itself, in red, where a
-participant can see it, rather than only in a console nobody is reading. A
-blocked spoken answer is **not** re-routed to chat: `planSpeech` split the
-answer before it reached the page, so the spoken half is lost to the call and
-survives only in the transcript. That is the first thing to check on a real
-call, and `docs/TODO.md` item 71 is where it is tracked until it has been.
-
-### The wire format, reconciled
-
-`src/providers/recall/wire.ts` was originally written **without access to
-Recall's API or its documentation**, so its endpoint paths and payload field
-names were guesses. It has since been reconciled against
-<https://docs.recall.ai> (2026-08-25). What is still unverified is the live
-behaviour: **no bot has been dispatched from this code against a real call**,
-because that needs an API key this repo does not have.
-
-The quarantine did its job — `provider.ts` named no Recall field, so the
-corrections landed in `wire.ts`, `translate.ts` and the fixtures, and the
-suite reported the rest. What the guesses got right: the host template, every
-endpoint path, `Token` auth, the Create Bot body (including
-`recording_config.transcript.provider` and `realtime_endpoints` nested inside
-`recording_config`), and `output_media.camera.kind: "webpage"`.
-
-Three were wrong, and each would have failed differently:
-
-- **The transcript payload is at `data.data`.** The sibling `data.transcript`
-  is a reference to the transcript _record_ (`{ id, metadata }`), not the
-  words. The old code read `data.transcript` first, so every utterance would
-  have been dropped as "transcript was empty" — a silent, total failure of
-  the one thing the integration exists to do.
-- **There is no `is_final` field.** Finality is the event name:
-  `transcript.partial_data` for a growing hypothesis, `transcript.data` once
-  it settles. The old code read a flag that never arrives and never
-  subscribed to partials at all, so the interim logic below was unreachable.
-- **`bot.status_change` is not a real-time event.** Bot status is an
-  account-level Svix webhook whose event names are per-status
-  (`bot.in_call_recording`, `bot.done`, …). Naming it in a real-time
-  endpoint's `events` array put an unknown value in every Create Bot call.
-
-`test/recall.test.ts` carries fixtures copied from the published payloads,
-including a `data.transcript` record reference that must not be mistaken for
-content.
-
-### Live transcription changes one thing upstream
-
-Speech recognition emits a growing hypothesis before it settles. An interim
-result (`isFinal: false`) is shown as a live caption and nothing else: not
-persisted, and never handed to the attention engine — otherwise the agent
-answers a question that has not finished being asked. Anything not explicitly
-marked as a partial is treated as final, so every non-streaming provider stays
-correct by default.
+**[docs/meeting-providers.md](docs/meeting-providers.md)** covers the rest: why
+a bot vendor rather than Meet's own API, the three vendor constraints that
+shape the design, where the latency goes, how the agent gets a voice, and the
+wire format as actually observed. Read it before changing the Recall provider.
 
 ## Persistence
 
@@ -526,8 +401,15 @@ This is a local developer prototype and it behaves like one:
 - `spawn` with an argument array, `shell: false`, always. No command strings;
 - the browser cannot name an arbitrary executable — the generic agent is off
   unless the operator enables it on the machine;
-- **permission requests are never auto-approved.** They go to a human, and the
+- **writes and commands are never auto-approved.** They go to a human, and the
   timeout denies rather than allows: silence is not consent;
+- **reads are auto-approved**, because a meeting has no approval UI and a
+  request that waits for a human waits for nobody — measured, that was 120
+  seconds of silence in a live call before the agent gave up and answered
+  without the file. Note what this widens: the agent's working directory is a
+  starting point, not a sandbox, and it runs with the permissions of the user
+  who started it. Set `autoApproveReads: false` on the gateway to take it
+  back;
 - the agent's own sandbox and approval rules are untouched — nothing here
   bypasses them;
 - ANSI escapes and control characters are stripped at the process boundary;
@@ -543,7 +425,7 @@ This is a local developer prototype and it behaves like one:
 | The agent never answers                        | Check the **Turn & tool activity** column for `ignored — …`. The attention engine explains every decision it makes. Tick "Address the agent explicitly" to bypass it. |
 | A turn hangs, then reports a timeout           | Idle timeout (no output at all) or total timeout. Both are configurable; both cancel the turn rather than leaving the process running.                                |
 | Permission requests never appear               | Some agents auto-approve read-only tools internally, so the callback never fires. That is the agent's own policy, not this app's.                                     |
-| Nothing is spoken                              | Speech is off, the browser has no `speechSynthesis`, or the response was suppressed — check Diagnostics for "response not spoken (…)".                                |
+| Nothing is spoken                              | No speaker page is configured, synthesis failed, or the response was suppressed — check Diagnostics for "response not spoken (…)".                                    |
 | `ExperimentalWarning: SQLite` on startup       | Expected on Node 22; `node:sqlite` is flagged experimental.                                                                                                           |
 | Port already in use                            | `AMP_PORT=… npm run dev`.                                                                                                                                             |
 
@@ -551,36 +433,41 @@ This is a local developer prototype and it behaves like one:
 
 **Real:** the ACP client (handshake, capability negotiation, session create and
 load, streaming, permissions, cancellation, timeouts, crash handling, graceful
-shutdown), the agent registry and executable checks, the attention engine, the
-prompt and speech pipeline, the MCP server and its capability model, the mock
-meeting provider, persistence, the realtime feed, the UI, and the fake ACP
-agent.
+shutdown), the agent registry, the attention engine, the prompt and speech
+pipeline including synthesis, the MCP server and its capability model, the mock
+provider, **the Recall provider — dispatched into real Google Meet calls with a
+real coding agent answering out loud**, persistence, the realtime feed, the UI,
+and the fake ACP agent.
 
-**Stubbed:** `ExternalMeetingProvider` — the seam for Recall.ai, Meeting BaaS,
-Vexa, Meet, Zoom and Teams. Its `ingest()` and `events()` work; the four
-lifecycle methods throw `NotImplementedError` with the reason. Nothing else in
-the app knows what a meeting platform is, which is what makes filling it in a
-contained job.
+**Stubbed:** `ExternalMeetingProvider`, the generic seam for other vendors
+(Meeting BaaS, Vexa). Its `ingest()` and `events()` work; the lifecycle methods
+throw `NotImplementedError` naming what is missing. Recall is the reference
+implementation to copy — nothing above the interface knows what a platform is,
+which is what keeps a second one a contained job.
 
-**Not attempted in v0:** server-side TTS and audio injection, speaker
-diarization, multiple agents in one meeting, cross-meeting memory, and
-authentication.
+**Not attempted:** authentication, cross-meeting memory, and speaker
+diarization beyond what the vendor supplies.
 
-## Next step: a real meeting provider
+## Known gaps
 
-Implement `MeetingProvider` against a bot vendor (Recall.ai or Meeting BaaS are
-the shortest paths, since they handle joining and diarization):
+Honest about what is not done, in the order it bites:
 
-1. `createMeeting` registers the platform meeting URL and returns the local record;
-2. `startMeeting` dispatches the bot and waits for admission;
-3. a webhook route translates the vendor's transcript events into `utterance`
-   events and pushes them onto the provider's queue — this is the only new code
-   with real substance;
-4. `sendChat` posts through the vendor's in-call chat API;
-5. `sendSpeech` sends text to the vendor's TTS/audio endpoint, which is the
-   point at which browser `speechSynthesis` stops being the speech layer;
-6. `endMeeting` removes the bot and closes the queue.
+- **MCP is stdio-only.** The gateway spawns the meeting's MCP server and hands
+  the agent a loopback URL, which works precisely because the agent is on this
+  machine. An agent reached over SSH, in a cluster, or in someone's cloud can
+  still be prompted and can still speak — but it gets no meeting tools. Until
+  this is served over HTTP, "runtime-agnostic" is true of ACP and only
+  partly true of MCP.
+- **A wake name split across two transcript events is missed.** The in-utterance
+  fixes handle `Co founder` inside one event; a name broken across two needs a
+  bounded same-speaker buffer that does not exist yet.
+- **Attention is rules, not judgement.** Deterministic is the right default and
+  the reason it is cheap, but a model asked "was that meant for me?" would
+  catch what grammar cannot. The decision and its reason are recorded for every
+  utterance, so this can be settled on evidence rather than taste.
+- **One meeting, one agent.** Nothing in the design forbids several; nothing
+  implements it either.
 
-Consent is a product requirement before step 1, not a technical one: a bot that
-joins a call is a recording device, and whatever the platform requires for
-disclosure has to happen first.
+Consent is a product requirement, not a technical one: a bot that joins a call
+is a recording device, and whatever the platform and the people in the room
+require has to happen first.
