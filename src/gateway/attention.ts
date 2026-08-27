@@ -400,6 +400,20 @@ interface WakeMatch {
   end: number;
 }
 
+/**
+ * A token reduced to the letters of the name inside it.
+ *
+ * Speech-to-text writes one spoken name several ways, and every one of these
+ * was observed on a live call: "cofounder", "Co founder", "co-founder". The
+ * hyphen and the "@" of a chat mention are punctuation around a name, not
+ * part of it. Whole tokens only — a substring match would find "cofounder"
+ * inside "discofounder", and a name matching inside an unrelated word is how
+ * an agent starts answering things nobody asked it.
+ */
+function bareWord(word: string): string {
+  return word.replace(/^@/u, "").replace(/[-\u2010-\u2015]/gu, "");
+}
+
 function findWake(
   tokens: Token[],
   wakeNames: readonly string[],
@@ -417,8 +431,12 @@ function findWake(
       const matches = candidate.parts.every((part, offset) => {
         const token = tokens[index + offset];
         if (token === undefined) return false;
-        // An "@codex" mention is still the bare name for matching purposes.
-        return token.word.replace(/^@/u, "") === part;
+        // An "@codex" mention is still the bare name for matching purposes,
+        // and a transcriber that writes "co-founder" for "cofounder" has not
+        // used a different word — it has punctuated the same one. Compared
+        // whole, never as a substring, so this cannot match inside another
+        // word.
+        return bareWord(token.word) === part;
       });
       if (matches) return { wakeName: candidate.name, start: index, end };
     }
@@ -440,7 +458,7 @@ function findWake(
         if (end >= tokens.length) break;
         let joined = "";
         for (let offset = 0; offset < span; offset += 1) {
-          joined += tokens[index + offset]?.word.replace(/^@/u, "") ?? "";
+          joined += bareWord(tokens[index + offset]?.word ?? "");
         }
         if (joined === target) {
           return { wakeName: candidate.name, start: index, end };
