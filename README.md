@@ -3,10 +3,11 @@
 **AMP is the Agent Meeting Proxy — the channel a coding agent joins a meeting
 through.**
 
-Give any ACP-speaking coding agent a seat in a live meeting: it hears
-speaker-attributed transcript, knows when it is being addressed, answers out
-loud, posts detail to the meeting chat, works while the conversation continues,
-and asks a human before it changes anything.
+Invite Claude Code, Codex, or any other ACP-speaking coding agent into a live
+**Google Meet, Zoom or Microsoft Teams** call. It joins as a participant: it
+hears speaker-attributed transcript, knows when it is being addressed, answers
+out loud, posts detail to the meeting chat, keeps working while the
+conversation continues, and asks a human before it changes anything.
 
 > A proxy, not a protocol: AMP defines no wire format of its own. It stands
 > between two that already exist — ACP toward your agent, MCP toward the
@@ -17,6 +18,32 @@ run against a real Google Meet call with a real coding agent answering out loud.
 It also has no authentication of its own, launches processes on the machine it
 runs on, and binds to loopback deliberately. Read _Security_ before exposing it
 to anything.
+
+## Is this what you were looking for?
+
+**"How do I invite my coding agent to a Google Meet?"** — Run AMP, point it at
+the meeting URL, and it dispatches a bot that carries your agent into the call.
+See _Quick start_ to try it against a simulator with no credentials, then
+_Meeting providers_ for a real call.
+
+**"Can Claude Code join a Zoom call and answer questions out loud?"** — Yes.
+That is the whole point. It has been run against real Google Meet calls with
+`claude-agent-acp` answering aloud; Zoom and Teams use the same provider.
+
+**"Is this an AI notetaker?"** — No, and the difference is the reason it
+exists. A notetaker listens and summarizes afterwards. AMP puts a _participant_
+in the room: it answers while the meeting is happening, and it is **your**
+agent, with your codebase, your tools and your instructions — so "why does the
+retry path drop that event?" gets an answer from the code, not from the
+transcript.
+
+**"Which agents work?"** — Any that speaks ACP over stdio: Claude Code, Codex,
+Hermes, and anything else with an ACP adapter. Your agent's model, workspace,
+instructions, tools and memory are untouched; AMP adds a room to be in.
+
+**"Do I need an account with anything?"** — For a real call, a bot-vendor key
+(Recall.ai) and a public URL. For development, nothing at all — the simulator
+and a fake ACP agent ship in the repo.
 
 ## What AMP is, precisely
 
