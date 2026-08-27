@@ -33,9 +33,21 @@ export interface AmpServer {
   stop: () => Promise<void>;
 }
 
+export interface CreateServerOptions {
+  /**
+   * The HTTP client the Recall provider dispatches bots with.
+   *
+   * Exists so a test can drive the real webhook ingress — translation,
+   * attention, prompting, the spawned agent — without a network or a
+   * credential. Nothing else has any business replacing it.
+   */
+  fetch?: typeof globalThis.fetch;
+}
+
 export function createServer(
   overrides: Partial<AppConfig> = {},
   env: NodeJS.ProcessEnv = process.env,
+  options: CreateServerOptions = {},
 ): AmpServer {
   const config: AppConfig = { ...loadConfig(env), ...overrides };
   const store = new MeetingStore(config.databasePath);
@@ -53,6 +65,7 @@ export function createServer(
   const recall = recallReady
     ? new RecallMeetingProvider({
         store,
+        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         config: {
           apiKey: config.recall.apiKey as string,
           region: config.recall.region,

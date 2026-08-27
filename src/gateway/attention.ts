@@ -423,7 +423,91 @@ function findWake(
       if (matches) return { wakeName: candidate.name, start: index, end };
     }
   }
+
+  // Speech-to-text splits compound names: "cofounder" comes back as
+  // "co founder", and the name simply stops existing. Observed on a live call
+  // and, until it was fixed, the agent went deaf to its own name.
+  //
+  // Matched by CONCATENATION over a short run of adjacent tokens, never by
+  // substring: "cofounder" is a substring of "discofounder", and a name that
+  // matches inside an unrelated word is how an agent starts answering things
+  // nobody asked it.
+  for (let index = 0; index < tokens.length; index += 1) {
+    for (const candidate of candidates) {
+      const target = candidate.parts.join("");
+      for (let span = 2; span <= MAX_SPLIT_TOKENS; span += 1) {
+        const end = index + span - 1;
+        if (end >= tokens.length) break;
+        let joined = "";
+        for (let offset = 0; offset < span; offset += 1) {
+          joined += tokens[index + offset]?.word.replace(/^@/u, "") ?? "";
+        }
+        if (joined === target) {
+          return { wakeName: candidate.name, start: index, end };
+        }
+      }
+    }
+  }
   return null;
+}
+
+/**
+ * How many adjacent tokens may be joined when looking for a split name.
+ *
+ * Three covers what transcription actually does to a compound. Higher would
+ * start joining unrelated words into an accidental match.
+ */
+const MAX_SPLIT_TOKENS = 3;
+
+/**
+ * Re-attach a vocative the vendor punctuated as its own sentence.
+ *
+ * A speaker pauses after saying a name, the vendor renders that pause as a
+ * full stop, and the sentence splitter then separates the address from what
+ * it introduced: "Cofounder. What do you think?" becomes one sentence naming
+ * nobody's question and one question addressing nobody. Both are correctly
+ * ignored, and the most natural way to address the agent goes unheard.
+ *
+ * Only a sentence that is NOTHING BUT the name (with the fillers speech opens
+ * on) is treated this way. "I spoke to Claude." keeps other words, so it is
+ * left alone — which is what stops this from becoming a way to trigger on any
+ * mention followed by a question.
+ */
+function mergeBareVocatives(
+  sentences: string[],
+  wakeNames: readonly string[],
+): string[] {
+  const merged: string[] = [];
+  for (let index = 0; index < sentences.length; index += 1) {
+    const sentence = sentences[index] ?? "";
+    const next = sentences[index + 1];
+    if (next !== undefined && isBareVocative(sentence, wakeNames)) {
+      merged.push(`${sentence.replace(/[.!?]+\s*$/u, "")}, ${next}`);
+      index += 1;
+      continue;
+    }
+    merged.push(sentence);
+  }
+  return merged;
+}
+
+/** A sentence consisting only of a wake name, give or take an opener. */
+function isBareVocative(
+  sentence: string,
+  wakeNames: readonly string[],
+): boolean {
+  const tokens = tokenize(sentence).filter((token) => token.word !== "");
+  let start = 0;
+  while (
+    start < tokens.length &&
+    LEADING_FILLERS.has(tokens[start]?.word ?? "")
+  ) {
+    start += 1;
+  }
+  const rest = tokens.slice(start);
+  if (rest.length === 0) return false;
+  const match = findWake(rest, wakeNames);
+  return match !== null && match.start === 0 && match.end === rest.length - 1;
 }
 
 /**
@@ -577,7 +661,10 @@ export function decideAttention(input: AttentionInput): AttentionDecision {
   }
 
   let lastReason: AttentionReason = "no_wake_name";
-  for (const sentence of splitSentences(text)) {
+  for (const sentence of mergeBareVocatives(
+    splitSentences(text),
+    input.wakeNames,
+  )) {
     const outcome = evaluateSentence(sentence, input.wakeNames);
     if (outcome.matched !== null) {
       const chatDirected =
