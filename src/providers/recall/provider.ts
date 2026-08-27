@@ -61,6 +61,16 @@ export interface RecallConfig {
   /** BCP-47 language for transcription. Non-English forfeits low latency. */
   transcriptLanguage?: string;
   botName?: string;
+  /**
+   * Machine size for the bot's browser, when a speaker page is streamed.
+   *
+   * Defaults to `web_4_core`. The vendor default is `web` — 250 millicores —
+   * and on that quarter core the speaker page's audio comes out choppy no
+   * matter how cheap the page is, because the bot is encoding video off the
+   * same budget. Set this to `web` explicitly to take the smaller machine
+   * back; it is the cheaper box, not the safer one.
+   */
+  botVariant?: string;
 }
 
 export interface RecallDeps {
@@ -254,6 +264,23 @@ export class RecallMeetingProvider implements MeetingProvider {
     return meeting;
   }
 
+  /**
+   * The same machine size on every platform we support.
+   *
+   * The field is per-platform because the vendor allows mixing, but nothing
+   * here wants that: the speaker page is identical on Meet, Zoom and Teams,
+   * so a size that is right for one is right for all, and a partial map would
+   * silently leave one platform on the quarter-core default.
+   */
+  #botVariant(): Record<string, string> {
+    const variant = this.#config.botVariant ?? "web_4_core";
+    return {
+      google_meet: variant,
+      zoom: variant,
+      microsoft_teams: variant,
+    };
+  }
+
   /** Dispatch the bot into the call. */
   async startMeeting(meetingId: string): Promise<void> {
     const runtime = this.#runtime(meetingId);
@@ -291,6 +318,10 @@ export class RecallMeetingProvider implements MeetingProvider {
                 },
               },
             },
+            // Sized WITH output media, never apart from it: the bigger machine
+            // exists to keep streamed audio clean, and a bot that only listens
+            // has nothing to spend it on.
+            variant: this.#botVariant(),
           }),
     };
 

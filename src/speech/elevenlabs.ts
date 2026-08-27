@@ -51,9 +51,20 @@ export interface ElevenLabsOptions {
 /**
  * Synthesize one sentence to MP3.
  *
- * `optimize_streaming_latency` trades a little prosody for time-to-first-byte,
- * which is the right trade here: this clip is holding up a live conversation,
- * and the sentence after it is already being written.
+ * 128 kbps at 44.1 kHz, and NOT the low-latency streaming optimization.
+ *
+ * The first version asked for 32 kbps at 22 kHz with the most aggressive
+ * latency setting, reasoning that the bytes cross a tunnel before anything
+ * can play. That was the right instinct for the wrong era: it came from
+ * fixing 650KB WAV files, and at 32 kbps a listener on a real call described
+ * the result as "jerking" — low-bitrate artifacts on speech, plus whatever
+ * ElevenLabs gives up at latency level 3.
+ *
+ * Measured, the whole trade is 65ms per sentence (351ms against 416ms) and
+ * 43KB instead of 11KB. Both are free now: audio for the next sentence is
+ * fetched while the current one plays, so synthesis time is hidden, and 43KB
+ * is still a fraction of the PCM this replaced. Spending 65ms to stop sounding
+ * broken is not a close call.
  */
 export async function synthesizeWithElevenLabs(
   text: string,
@@ -74,7 +85,7 @@ export async function synthesizeWithElevenLabs(
   try {
     const response = await doFetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}` +
-        `?output_format=mp3_22050_32&optimize_streaming_latency=3`,
+        `?output_format=mp3_44100_128`,
       {
         method: "POST",
         headers: {

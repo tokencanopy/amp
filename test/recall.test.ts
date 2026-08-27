@@ -139,6 +139,7 @@ function recordingFetch(
 function makeProvider(
   options: {
     speakerUrl?: string;
+    botVariant?: string;
     responder?: (call: Call) => { status?: number; body?: unknown };
   } = {},
 ) {
@@ -156,6 +157,9 @@ function makeProvider(
       ...(options.speakerUrl === undefined
         ? {}
         : { speakerUrl: options.speakerUrl }),
+      ...(options.botVariant === undefined
+        ? {}
+        : { botVariant: options.botVariant }),
     },
   });
   return { provider, calls: recorded.calls };
@@ -817,5 +821,51 @@ describe("webhook route", () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.json().error.code).toBe("unknown_provider");
+  });
+});
+
+describe("the machine the speaker page runs on", () => {
+  /**
+   * These guard a field whose absence is invisible everywhere except a live
+   * call. Nothing errors without it, no test goes red, the audio is correct
+   * on the wire and the page is correct — the bot's browser simply does not
+   * have the CPU to play speech and encode video at once, and a listener
+   * hears it break up. It cost a run of live meetings to find, so it is
+   * pinned here rather than left to a default.
+   */
+  it("asks for a machine that can actually play audio", async () => {
+    const { provider, calls } = makeProvider({
+      speakerUrl: "https://speaker.test",
+    });
+    await liveMeeting(provider);
+
+    const body = calls[0]!.body as { variant?: Record<string, string> };
+    // The vendor default is `web`: 250 millicores, a quarter of one core.
+    expect(body.variant).toEqual({
+      google_meet: "web_4_core",
+      zoom: "web_4_core",
+      microsoft_teams: "web_4_core",
+    });
+  });
+
+  it("does not pay for the bigger machine when nothing is streamed", async () => {
+    // A bot with no speaker page only listens, and listening is cheap. The
+    // larger variant is billed per hour, so it follows output media exactly.
+    const { provider, calls } = makeProvider();
+    await liveMeeting(provider);
+
+    const body = calls[0]!.body as { variant?: unknown };
+    expect(body.variant).toBeUndefined();
+  });
+
+  it("lets a deployment choose a different size", async () => {
+    const { provider, calls } = makeProvider({
+      speakerUrl: "https://speaker.test",
+      botVariant: "web_gpu",
+    });
+    await liveMeeting(provider);
+
+    const body = calls[0]!.body as { variant?: Record<string, string> };
+    expect(body.variant?.google_meet).toBe("web_gpu");
   });
 });

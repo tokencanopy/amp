@@ -69,6 +69,7 @@ const schema = z.object({
   AMP_RECALL_SPEAKER_URL: blankIsUnset,
   /** A macOS `say` voice for the speaker page. Unknown names fall back. */
   AMP_RECALL_SPEAKER_VOICE: blankIsUnset,
+  AMP_RECALL_BOT_VARIANT: blankIsUnset,
   /** Transcription language. Only English can use low-latency mode. */
   AMP_RECALL_TRANSCRIPT_LANGUAGE: blankIsUnset,
   AMP_RECALL_BOT_NAME: z.string().default("AMP cofounder"),
@@ -98,6 +99,7 @@ export interface AppConfig {
     webhookBaseUrl: string | undefined;
     webhookSecret: string | undefined;
     speakerUrl: string | undefined;
+    botVariant: string | undefined;
     speakerVoice: string | undefined;
     transcriptLanguage: string | undefined;
     botName: string;
@@ -136,6 +138,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       webhookSecret: parsed.AMP_RECALL_WEBHOOK_SECRET,
       speakerUrl: parsed.AMP_RECALL_SPEAKER_URL,
       speakerVoice: parsed.AMP_RECALL_SPEAKER_VOICE,
+      botVariant: parsed.AMP_RECALL_BOT_VARIANT,
       transcriptLanguage: parsed.AMP_RECALL_TRANSCRIPT_LANGUAGE,
       botName: parsed.AMP_RECALL_BOT_NAME,
     },

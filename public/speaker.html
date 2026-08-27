@@ -80,28 +80,18 @@
         background: var(--muted);
         flex: none;
       }
+      /*
+       * Deliberately static. This page is being screen-captured and encoded
+       * to video continuously, so anything that animates forever is work the
+       * encoder pays for on every frame, for as long as the meeting lasts.
+       * A colour change says "speaking" just as clearly as a pulse, and costs
+       * one repaint instead of sixty a second.
+       */
       .dot[data-state="speaking"] {
         background: var(--live);
-        animation: pulse 1.1s ease-in-out infinite;
       }
       .dot[data-state="error"] {
         background: #e5534b;
-      }
-      @keyframes pulse {
-        0%,
-        100% {
-          opacity: 1;
-          transform: scale(1);
-        }
-        50% {
-          opacity: 0.45;
-          transform: scale(0.82);
-        }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        .dot[data-state="speaking"] {
-          animation: none;
-        }
       }
       .name {
         font-size: clamp(20px, 3.6vmin, 44px);
@@ -314,7 +304,6 @@
             audioBlocked = false;
             el("blocked").hidden = true;
             setStatus("audio unblocked by interaction");
-            if (audioCtx !== null) void audioCtx.resume();
             void drain();
           },
           { passive: true },
@@ -338,96 +327,48 @@
       }
 
       /**
-       * Schedule a clip on one continuous audio timeline.
+       * Play one clip, using the browser's own audio pipeline.
        *
-       * Sequential <audio> elements cannot sound continuous: each swap costs
-       * a beat to create, decode and start, and that beat lands exactly at a
-       * sentence boundary where a listener is most likely to hear it. Web
-       * Audio schedules by absolute time instead, so clip two begins at the
-       * precise sample clip one ends on.
+       * An earlier version scheduled decoded buffers on a Web Audio timeline
+       * to remove the seam between sentences. It did — measured at 0.0000s —
+       * and it made the audio glitch badly in the browser that matters, which
+       * is not this one. That page runs inside the meeting-bot vendor's
+       * infrastructure, capturing and encoding its own output at the same
+       * time, and it has no headroom for JavaScript-scheduled audio or for
+       * scanning a third of a million samples per sentence.
        *
-       * `nextStart` is the running edge of that timeline. When audio arrives
-       * faster than it plays, clips queue seamlessly behind it; when it
-       * arrives late, the edge has already passed and the clip plays at once
-       * rather than waiting for a slot that is gone.
+       * An <audio> element hands decode, buffering and playback to native
+       * code that is already running. The seam comes back — an element swap
+       * plus whatever silence the synthesizer padded on — but a small, honest
+       * gap between sentences is worth far more in a real meeting than a
+       * seamless join that stutters.
+       *
+       * The element is created during PREFETCH, not at playback, so by the
+       * time a clip's turn arrives it is already decoded and buffered. That
+       * is what removes the pause the first version had, and it costs nothing
+       * at play time.
        */
-      let audioCtx = null;
-      let nextStart = 0;
-
-      function ensureContext() {
-        if (audioCtx === null) {
-          const Ctor = window.AudioContext ?? window.webkitAudioContext;
-          if (Ctor === undefined) return null;
-          audioCtx = new Ctor();
-        }
-        if (audioCtx.state === "suspended") void audioCtx.resume();
-        return audioCtx;
-      }
-
-      /**
-       * Where the audible part of a clip begins and ends.
-       *
-       * A synthesizer pads every utterance with silence — measured on real
-       * ElevenLabs output: ~92ms before the first word, and 166ms to 386ms
-       * after the last. Scheduling clips edge to edge therefore still leaves a
-       * quarter to half a second of dead air at every sentence boundary, and
-       * because the tail varies, the pause is a different length each time.
-       * Irregular pauses read as a system struggling; regular ones read as
-       * someone speaking.
-       */
-      function audibleRange(buffer) {
-        const data = buffer.getChannelData(0);
-        const threshold = 0.01;
-        let first = 0;
-        while (first < data.length && Math.abs(data[first]) < threshold) {
-          first += 1;
-        }
-        let last = data.length - 1;
-        while (last > first && Math.abs(data[last]) < threshold) {
-          last -= 1;
-        }
-        if (first >= last) return { offset: 0, duration: buffer.duration };
-        return {
-          offset: first / buffer.sampleRate,
-          duration: (last - first) / buffer.sampleRate,
-        };
-      }
-
-      /**
-       * A deliberate beat between sentences.
-       *
-       * Not zero: speech with no pause at a full stop sounds hurried and runs
-       * clauses together. This replaces a variable 258-478ms of accidental
-       * dead air with one consistent short breath.
-       */
-      const SENTENCE_PAUSE_SECONDS = 0.09;
-
-      async function scheduleBlob(blob) {
-        const ctx = ensureContext();
-        if (ctx === null) throw new Error("no Web Audio support");
-
-        const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
-        const { offset, duration } = audibleRange(decoded);
-        const source = ctx.createBufferSource();
-        source.buffer = decoded;
-        source.connect(ctx.destination);
-
-        // A small lead so scheduling never lands in the past, which would
-        // drop the clip silently.
-        const startAt = Math.max(ctx.currentTime + 0.02, nextStart);
-        // Start at the first real sample and run only for the audible span,
-        // so neither the clip's own padding reaches the call.
-        source.start(startAt, offset, duration);
-        nextStart = startAt + duration + SENTENCE_PAUSE_SECONDS;
-
-        if (ctx.state !== "running") {
-          audioBlocked = true;
-          el("blocked").hidden = false;
-          setState("error");
-          setStatus(`audio context is ${ctx.state}; the call cannot hear this`);
-        }
-
-        return { startAt, endAt: startAt + duration, ctx };
+      function playClip(audio) {
+        return new Promise((resolve) => {
+          let settled = false;
+          const done = () => {
+            if (settled) return;
+            settled = true;
+            resolve();
+          };
+          audio.addEventListener("ended", done, { once: true });
+          audio.addEventListener("error", () => {
+            setStatus("the browser could not play that clip");
+            done();
+          });
+          audio.play().catch((error) => {
+            audioBlocked = true;
+            el("blocked").hidden = false;
+            setState("error");
+            setStatus(`autoplay refused: ${error.message}`);
+            done();
+          });
+        });
       }
 
       function speakLocally(text) {
@@ -462,13 +403,19 @@
        */
       function enqueue(text) {
         const pending = serverTtsWorks
-          ? fetchSpeech(text).catch((error) => {
-              // Demote for the rest of the session rather than retrying a
-              // path that is already known to be broken.
-              serverTtsWorks = false;
-              setStatus(`server tts failed (${error.message}); falling back`);
-              return null;
-            })
+          ? fetchSpeech(text)
+              .then((blob) => {
+                // Decode and buffer NOW, while something else is playing.
+                const audio = new Audio(URL.createObjectURL(blob));
+                audio.preload = "auto";
+                audio.load();
+                return audio;
+              })
+              .catch((error) => {
+                serverTtsWorks = false;
+                setStatus(`server tts failed (${error.message}); falling back`);
+                return null;
+              })
           : Promise.resolve(null);
         queue.push({ text, audio: pending });
         void drain();
@@ -479,42 +426,21 @@
         draining = true;
         while (queue.length > 0) {
           const { text, audio } = queue.shift();
+          el("said").textContent = text;
+          el("howto").hidden = true;
+          setState("speaking");
           try {
-            const blob = await audio;
-            if (blob === null) {
-              await speakLocally(text);
-              continue;
-            }
-            const { startAt, endAt, ctx } = await scheduleBlob(blob);
-            // The tile should show a sentence WHILE it is heard, not when it
-            // was scheduled — those differ by however much is queued ahead.
-            const lead = Math.max(0, (startAt - ctx.currentTime) * 1000);
-            setTimeout(() => {
-              el("said").textContent = text;
-              // The instructions are for a room waiting on the agent. While
-              // it is talking, what it is saying matters more.
-              el("howto").hidden = true;
-              setState("speaking");
-            }, lead);
-            setTimeout(
-              () => {
-                if (queue.length === 0) {
-                  setState("idle");
-                  // Back to the hint, so a participant joining late still
-                  // learns how to talk to it.
-                  el("said").textContent = "";
-                  el("howto").hidden = false;
-                }
-              },
-              Math.max(0, (endAt - ctx.currentTime) * 1000),
-            );
-            setStatus(
-              `queued ${String(Math.round((endAt - ctx.currentTime) * 100) / 100)}s of speech`,
-            );
+            const clip = await audio;
+            if (clip === null) await speakLocally(text);
+            else await playClip(clip);
           } catch (error) {
             setState("error");
             setStatus(`could not speak: ${error.message}`);
-            await speakLocally(text);
+          }
+          if (queue.length === 0) {
+            setState("idle");
+            el("said").textContent = "";
+            el("howto").hidden = false;
           }
         }
         draining = false;

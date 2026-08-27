@@ -61,6 +61,28 @@ export interface CreateBotRequest {
     }[];
   };
   /**
+   * [VERIFIED] The size of machine the bot's browser runs on, per platform.
+   *
+   * This is the single most load-bearing field for audio quality, and it is
+   * easy to never notice because it is optional and the default is quiet.
+   * The default `web` variant gets **250 millicores** — a quarter of one CPU
+   * core — and 750MB. That quarter core has to decode speech audio, run the
+   * speaker page, and let the bot encode 1280x720 video at 15fps off the same
+   * budget. It is not enough, and the way it fails is choppy audio: the
+   * vendor's own FAQ answers "why is the bot's audio output choppy?" with
+   * "your bot's instance doesn't have enough CPU power", and names
+   * `web_4_core` (2250 millicores, 5250MB) as sufficient for most output
+   * media use cases.
+   *
+   * Diagnosing this from the outside is close to impossible — the audio is
+   * correct on the wire, the page is correct, and the glitch happens in a
+   * browser you cannot see, on a machine whose size is not mentioned anywhere
+   * near the audio APIs. It costs more per hour, so it is a deliberate
+   * setting rather than a default, and it belongs to output media: a bot that
+   * only listens does not need it.
+   */
+  variant?: Record<string, string>;
+  /**
    * [VERIFIED] Streams a webpage into the call — how the agent speaks.
    *
    * There is no audio-only mode: the docs are explicit that output media
