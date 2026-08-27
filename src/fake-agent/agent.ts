@@ -56,6 +56,17 @@ const ACTION_WORDS = [
   "webhook",
 ];
 
+/**
+ * Asking for something to CHANGE, as opposed to something to be looked at.
+ *
+ * The distinction decides which permission kind this agent asks for, and the
+ * two are handled very differently: a read is approved without a human,
+ * because a meeting has nobody who can answer, while an edit still waits for
+ * one. A fake agent that only ever asked to read could not exercise the half
+ * that still stops and waits.
+ */
+const WRITE_WORDS = ["fix", "deploy", "change", "edit", "update", "write"];
+
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, ms);
@@ -325,8 +336,9 @@ export class FakeAcpAgent {
         sessionId,
         toolCall: {
           toolCallId: "call_1",
-          title: "Read files in the workspace",
-          kind: "read",
+          ...(WRITE_WORDS.some((word) => question.toLowerCase().includes(word))
+            ? { title: "Edit files in the workspace", kind: "edit" }
+            : { title: "Read files in the workspace", kind: "read" }),
           rawInput: {
             path: "src/webhooks/retry.ts",
             reason: question.slice(0, 120),

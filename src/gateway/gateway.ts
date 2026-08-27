@@ -96,6 +96,22 @@ export interface GatewayOptions {
   publish: GatewayPublisher;
   /** How long a permission request waits for a human before it is denied. */
   permissionTimeoutMs?: number;
+  /**
+   * Approve read-only tools without asking. Defaults to true.
+   *
+   * A meeting has no approval UI, so a request that waits for a human waits
+   * for nobody: it sits out the whole timeout while the room hears silence,
+   * and the agent then answers anyway without whatever it meant to check.
+   * That is the worst of both — the delay of asking and the ignorance of
+   * denying. Measured on a live call: 120 seconds of dead air, for a file
+   * read the agent wanted in order to answer the question it had just been
+   * asked out loud.
+   *
+   * Reads are where waiting buys least, so they are answered here. Writes and
+   * commands still go to a human and still time out, because those change
+   * something, and silence must not be consent.
+   */
+  autoApproveReads?: boolean;
   /** Built per meeting so the agent's MCP tools are scoped to that meeting. */
   mcpServers?: (context: {
     meetingId: string;
@@ -852,11 +868,53 @@ export class MeetingGateway {
    * There is no auto-approve path, and the timeout denies rather than
    * allows. An unanswered request is not consent.
    */
+  /**
+   * The option that means "yes, this once".
+   *
+   * ACP lets each agent name its own options, so these are matched on `kind`
+   * rather than on a label that varies between adapters. `allow_once` is
+   * preferred over `allow_always` deliberately: a standing grant made on
+   * someone's behalf outlives the meeting that justified it, and nobody in
+   * the room would know it had been given.
+   */
+  #allowOnce(request: PermissionRequest): string | null {
+    const once = request.options.find((option) => option.kind === "allow_once");
+    if (once !== undefined) return once.optionId;
+    const always = request.options.find(
+      (option) => option.kind === "allow_always",
+    );
+    return always?.optionId ?? null;
+  }
+
   #onPermission(
     meetingId: string,
     request: PermissionRequest,
   ): Promise<PermissionOutcome> {
     const runtime = this.#runtime(meetingId);
+
+    // Answered here rather than by a human who cannot see the question.
+    // Classified on the protocol's own tool kind and never on the tool's
+    // name: an adapter may call its reader anything, and matching names would
+    // either miss a read or let something that is not a read through.
+    if (
+      this.#options.autoApproveReads !== false &&
+      request.toolKind === "read"
+    ) {
+      const optionId = this.#allowOnce(request);
+      if (optionId !== null) {
+        this.#store.recordAgentEvent(
+          meetingId,
+          "permission_auto_approved",
+          `${request.toolName} (${request.toolKind})`,
+        );
+        this.#publish(meetingId, {
+          type: "permission_resolved",
+          requestId: request.requestId,
+          outcome: "auto-approved (read)",
+        });
+        return Promise.resolve({ outcome: "selected", optionId });
+      }
+    }
     const pending: PendingPermission = {
       requestId: `${request.requestId}_${randomUUID().slice(0, 8)}`,
       meetingId,

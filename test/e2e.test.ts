@@ -251,18 +251,48 @@ describe("the vertical slice", () => {
     expect(JSON.stringify(thoughts)).not.toContain("Considering the room");
   });
 
-  it("puts a permission request in front of a human and does nothing until answered", async () => {
+  it("answers a read itself rather than leaving the room in silence", async () => {
+    // Measured on a live call before this existed: the agent asked to read a
+    // file in order to answer a question it had just been asked out loud,
+    // nobody in the meeting could see the prompt, and the room got 120
+    // seconds of dead air before it gave up and answered without the file.
+    // A meeting has no approval UI, so a read is decided here.
     const { meetingId, grace } = await startMeeting();
     const feed = await openFeed(meetingId);
     await connectFakeAgent(meetingId);
 
     await say(meetingId, grace, "Codex, inspect the webhook retries.");
 
+    const readAnswer = await waitFor("the answer", async () => {
+      const view = await call<MeetingView>(`/api/meetings/${meetingId}`);
+      return (
+        view.transcript.find((entry) => entry.speakerKind === "agent") ?? null
+      );
+    });
+    expect(readAnswer.text).toContain("retry path");
+
+    // Nobody was ever asked to approve it.
+    const settled = await call<MeetingView>(`/api/meetings/${meetingId}`);
+    expect(settled.agent.pendingPermissions).toHaveLength(0);
+    expect(feed.ofType("permission_resolved")[0]!["outcome"]).toContain(
+      "auto-approved",
+    );
+  });
+
+  it("puts a write in front of a human and does nothing until answered", async () => {
+    const { meetingId, grace } = await startMeeting();
+    const feed = await openFeed(meetingId);
+    await connectFakeAgent(meetingId);
+
+    // "fix", not "inspect": changing something still waits for a person,
+    // because silence must not be read as consent.
+    await say(meetingId, grace, "Codex, fix the webhook retries.");
+
     const request = await waitFor("a permission request", async () => {
       const view = await call<MeetingView>(`/api/meetings/${meetingId}`);
       return view.agent.pendingPermissions[0] ?? null;
     });
-    expect(request.toolName).toBe("Read files in the workspace");
+    expect(request.toolName).toBe("Edit files in the workspace");
     expect(feed.ofType("permission_requested")).toHaveLength(1);
 
     // Nothing has been said while it waits.
@@ -291,7 +321,7 @@ describe("the vertical slice", () => {
   it("denies a permission request and the agent reports it did nothing", async () => {
     const { meetingId, grace } = await startMeeting();
     await connectFakeAgent(meetingId);
-    await say(meetingId, grace, "Codex, inspect the webhook retries.");
+    await say(meetingId, grace, "Codex, fix the webhook retries.");
 
     const request = await waitFor("a permission request", async () => {
       const view = await call<MeetingView>(`/api/meetings/${meetingId}`);
