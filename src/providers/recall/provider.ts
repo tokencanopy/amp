@@ -173,8 +173,8 @@ export class RecallMeetingProvider implements MeetingProvider {
    *
    * `auto` is also worth avoiding on its own merits. Measured on a live call,
    * auto-detection on mixed Chinese and English rendered whole English
-   * questions as one unbroken token — "canyoutellmemorehowyouareimplemented" —
-   * and that is what reached the agent as the question.
+   * questions as one unbroken token — "whatistheretrybudgetforthewebhook" —
+   * and a question in that shape is what reaches the agent.
    */
   #transcription(): Record<string, string> {
     const language = this.#config.transcriptLanguage ?? "en";
